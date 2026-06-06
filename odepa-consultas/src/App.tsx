@@ -36,7 +36,7 @@ const REGIONS = [
 ]
 
 const PAGE_SIZE = 25
-const API_BASE = 'https://datos.odepa.gob.cl/es/api/action/datastore_search'
+const API_BASE = '/api/search'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
