@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Package, Search, RefreshCw } from 'lucide-react'
+import { Package, Search, RefreshCw, ChevronUp, ChevronDown } from 'lucide-react'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -112,10 +112,11 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [hasSearched, setHasSearched] = useState(false)
+  const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc')
 
   // ── Fetch ──────────────────────────────────────────────────────────────────
 
-  const buildUrl = (pageNum: number): string => {
+  const buildUrl = (pageNum: number, sort: 'desc' | 'asc'): string => {
     const resourceId = RESOURCE_IDS[tipoPrecio][anio]
     const params = new URLSearchParams({
       resource_id: resourceId,
@@ -127,14 +128,15 @@ export default function App() {
     if (subsector) filters['Subsector'] = subsector
     if (region) filters['ID region'] = Number(region)
     if (Object.keys(filters).length > 0) params.set('filters', JSON.stringify(filters))
+    params.set('sort', `Fecha ${sort}`)
     return `${API_BASE}?${params.toString()}`
   }
 
-  const fetchData = async (pageNum: number) => {
+  const fetchData = async (pageNum: number, sort: 'desc' | 'asc' = sortDir) => {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch(buildUrl(pageNum))
+      const res = await fetch(buildUrl(pageNum, sort))
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data: ApiResponse = await res.json()
       setRecords(data.result.records)
@@ -149,7 +151,13 @@ export default function App() {
 
   const handleSearch = () => {
     setHasSearched(true)
-    fetchData(1)
+    fetchData(1, sortDir)
+  }
+
+  const toggleSort = () => {
+    const next = sortDir === 'desc' ? 'asc' : 'desc'
+    setSortDir(next)
+    fetchData(page, next)
   }
 
   // ── Derived values ─────────────────────────────────────────────────────────
@@ -366,7 +374,16 @@ export default function App() {
                 <table className="table table-zebra table-sm w-full">
                   <thead>
                     <tr className="bg-green-700 text-white [&>th]:text-white [&>th]:font-semibold">
-                      <th>Fecha</th>
+                      <th>
+                        <button
+                          className="flex items-center gap-1 hover:opacity-80 transition-opacity"
+                          onClick={toggleSort}
+                          title="Ordenar por fecha"
+                        >
+                          Fecha
+                          {sortDir === 'desc' ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+                        </button>
+                      </th>
                       <th>Producto</th>
                       <th>Variedad</th>
                       <th>Calidad</th>
