@@ -122,7 +122,7 @@ export default function App() {
       limit: String(PAGE_SIZE),
       offset: String((pageNum - 1) * PAGE_SIZE),
     })
-    if (producto.trim()) params.set('q', producto.trim())
+    if (producto.trim()) params.set('q', JSON.stringify({ Producto: producto.trim() }))
     const filters: Record<string, string | number> = {}
     if (subsector) filters['Subsector'] = subsector
     if (region) filters['ID region'] = Number(region)
