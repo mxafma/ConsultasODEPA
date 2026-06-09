@@ -22,14 +22,14 @@ const SORT_FIELD: Record<TipoPrecio, string> = {
   consumidor: 'Fecha inicio',
 }
 
+const TIPOS_MONITOREO = [
+  'Feria libre',
+  'Supermercado',
+]
+
 const GRUPOS_CONSUMIDOR = [
   'Frutas',
   'Hortalizas',
-  'Carne bovina',
-  'Carne de Cerdo - Ave - Cordero',
-  'Lácteos - Huevos - Margarinas',
-  'Abarrotes y otros',
-  'Pan',
 ]
 
 const REGIONS = [
@@ -140,6 +140,7 @@ export default function App() {
   const [anio, setAnio] = useState<Anio>(2026)
   const [subsector, setSubsector] = useState('')
   const [grupo, setGrupo] = useState('')
+  const [tipoMonitoreo, setTipoMonitoreo] = useState('')
   const [region, setRegion] = useState('')
   const [producto, setProducto] = useState('')
 
@@ -166,8 +167,9 @@ export default function App() {
     if (producto.trim()) params.set('q', JSON.stringify({ Producto: producto.trim() }))
 
     const filters: Record<string, string | number> = {}
-    if (tipo === 'mayorista' && subsector)   filters['Subsector'] = subsector
-    if (tipo === 'consumidor' && grupo)       filters['Grupo'] = grupo
+    if (tipo === 'mayorista' && subsector)          filters['Subsector'] = subsector
+    if (tipo === 'consumidor' && grupo)             filters['Grupo'] = grupo
+    if (tipo === 'consumidor' && tipoMonitoreo)     filters['Tipo de punto monitoreo'] = tipoMonitoreo
     if (region) filters['ID region'] = Number(region)
     if (Object.keys(filters).length > 0) params.set('filters', JSON.stringify(filters))
 
@@ -213,6 +215,7 @@ export default function App() {
     // reset category filters that are tipo-specific
     setSubsector('')
     setGrupo('')
+    setTipoMonitoreo('')
   }
 
   // ── Derived values ─────────────────────────────────────────────────────────
@@ -321,6 +324,24 @@ export default function App() {
                     <option value="">Todos</option>
                     {GRUPOS_CONSUMIDOR.map(g => (
                       <option key={g} value={g}>{g}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {tipoPrecio === 'consumidor' && (
+                <div className="form-control">
+                  <label className="label py-1">
+                    <span className="label-text font-semibold">Punto de monitoreo</span>
+                  </label>
+                  <select
+                    className="select select-bordered select-sm"
+                    value={tipoMonitoreo}
+                    onChange={e => setTipoMonitoreo(e.target.value)}
+                  >
+                    <option value="">Todos</option>
+                    {TIPOS_MONITOREO.map(t => (
+                      <option key={t} value={t}>{t}</option>
                     ))}
                   </select>
                 </div>
