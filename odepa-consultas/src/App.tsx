@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Package, Search, RefreshCw, ChevronUp, ChevronDown } from 'lucide-react'
+import { Package, Search, RefreshCw, ChevronUp, ChevronDown, X } from 'lucide-react'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -16,21 +16,13 @@ const RESOURCE_IDS = {
   },
 } as const
 
-// Mayorista uses "Fecha"; consumidor uses "Fecha inicio"
 const SORT_FIELD: Record<TipoPrecio, string> = {
   mayorista: 'Fecha',
   consumidor: 'Fecha inicio',
 }
 
-const TIPOS_MONITOREO = [
-  'Feria libre',
-  'Supermercado',
-]
-
-const GRUPOS_CONSUMIDOR = [
-  'Frutas',
-  'Hortalizas',
-]
+const TIPOS_MONITOREO = ['Feria libre', 'Supermercado']
+const GRUPOS_CONSUMIDOR = ['Frutas', 'Hortalizas']
 
 const REGIONS = [
   { id: 1,  name: 'Tarapacá' },
@@ -58,6 +50,15 @@ const API_BASE = '/api/search'
 
 type TipoPrecio = 'mayorista' | 'consumidor'
 type Anio = 2024 | 2025 | 2026
+
+interface Filters {
+  producto: string
+  region: string     // ID region as string, e.g. "13"
+  subsector: string
+  grupo: string
+  tipoMonitoreo: string
+  mercado: string
+}
 
 interface MayoristaRecord {
   _id: number
@@ -99,10 +100,7 @@ interface ConsumidorRecord {
 type PriceRecord = MayoristaRecord | ConsumidorRecord
 
 interface ApiResponse {
-  result: {
-    total: number
-    records: PriceRecord[]
-  }
+  result: { total: number; records: PriceRecord[] }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -114,16 +112,10 @@ function parsePrice(val: string): number {
 
 function formatCLP(n: number): string {
   if (n === 0) return '—'
-  return n.toLocaleString('es-CL', {
-    style: 'currency',
-    currency: 'CLP',
-    maximumFractionDigits: 0,
-  })
+  return n.toLocaleString('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 })
 }
 
-function formatPrice(val: string): string {
-  return formatCLP(parsePrice(val))
-}
+function formatPrice(val: string): string { return formatCLP(parsePrice(val)) }
 
 function pageWindow(page: number, total: number): number[] {
   if (total <= 5) return Array.from({ length: total }, (_, i) => i + 1)
@@ -132,17 +124,23 @@ function pageWindow(page: number, total: number): number[] {
   return [page - 2, page - 1, page, page + 1, page + 2]
 }
 
+function regionName(id: string): string {
+  return REGIONS.find(r => String(r.id) === id)?.name ?? id
+}
+
 // ── Component ────────────────────────────────────────────────────────────────
 
+const EMPTY_FILTERS: Filters = {
+  producto: '', region: '', subsector: '', grupo: '', tipoMonitoreo: '', mercado: '',
+}
+
 export default function App() {
-  // Filter state
+  // Panel selectors
   const [tipoPrecio, setTipoPrecio] = useState<TipoPrecio>('mayorista')
   const [anio, setAnio] = useState<Anio>(2026)
-  const [subsector, setSubsector] = useState('')
-  const [grupo, setGrupo] = useState('')
-  const [tipoMonitoreo, setTipoMonitoreo] = useState('')
-  const [region, setRegion] = useState('')
-  const [producto, setProducto] = useState('')
+
+  // All filter values in one object (drives both panel inputs and buildUrl)
+  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS)
 
   // Result state
   const [records, setRecords] = useState<PriceRecord[]>([])
@@ -152,26 +150,25 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [hasSearched, setHasSearched] = useState(false)
   const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc')
-  // tipo that was used for the currently displayed results
   const [resultTipo, setResultTipo] = useState<TipoPrecio>('mayorista')
 
   // ── Fetch ──────────────────────────────────────────────────────────────────
 
-  const buildUrl = (pageNum: number, sort: 'desc' | 'asc', tipo: TipoPrecio): string => {
-    const resourceId = RESOURCE_IDS[tipo][anio]
+  const buildUrl = (pageNum: number, sort: 'desc' | 'asc', tipo: TipoPrecio, f: Filters): string => {
     const params = new URLSearchParams({
-      resource_id: resourceId,
+      resource_id: RESOURCE_IDS[tipo][anio],
       limit: String(PAGE_SIZE),
       offset: String((pageNum - 1) * PAGE_SIZE),
     })
-    if (producto.trim()) params.set('q', JSON.stringify({ Producto: producto.trim() }))
+    if (f.producto.trim()) params.set('q', JSON.stringify({ Producto: f.producto.trim() }))
 
-    const filters: Record<string, string | number> = {}
-    if (tipo === 'mayorista' && subsector)          filters['Subsector'] = subsector
-    if (tipo === 'consumidor' && grupo)             filters['Grupo'] = grupo
-    if (tipo === 'consumidor' && tipoMonitoreo)     filters['Tipo de punto monitoreo'] = tipoMonitoreo
-    if (region) filters['ID region'] = Number(region)
-    if (Object.keys(filters).length > 0) params.set('filters', JSON.stringify(filters))
+    const apiFilters: Record<string, string | number> = {}
+    if (tipo === 'mayorista' && f.subsector)       apiFilters['Subsector'] = f.subsector
+    if (tipo === 'mayorista' && f.mercado)          apiFilters['Mercado'] = f.mercado
+    if (tipo === 'consumidor' && f.grupo)           apiFilters['Grupo'] = f.grupo
+    if (tipo === 'consumidor' && f.tipoMonitoreo)   apiFilters['Tipo de punto monitoreo'] = f.tipoMonitoreo
+    if (f.region)                                   apiFilters['ID region'] = Number(f.region)
+    if (Object.keys(apiFilters).length > 0) params.set('filters', JSON.stringify(apiFilters))
 
     params.set('sort', `${SORT_FIELD[tipo]} ${sort}`)
     return `${API_BASE}?${params.toString()}`
@@ -181,11 +178,15 @@ export default function App() {
     pageNum: number,
     sort: 'desc' | 'asc' = sortDir,
     tipo: TipoPrecio = resultTipo,
+    overrides: Partial<Filters> = {},
   ) => {
+    const f: Filters = { ...filters, ...overrides }
+    if (Object.keys(overrides).length > 0) setFilters(f)
+
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch(buildUrl(pageNum, sort, tipo))
+      const res = await fetch(buildUrl(pageNum, sort, tipo, f))
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data: ApiResponse = await res.json()
       setRecords(data.result.records)
@@ -212,13 +213,21 @@ export default function App() {
 
   const handleTipoChange = (next: TipoPrecio) => {
     setTipoPrecio(next)
-    // reset category filters that are tipo-specific
-    setSubsector('')
-    setGrupo('')
-    setTipoMonitoreo('')
+    setFilters(f => ({ ...f, subsector: '', grupo: '', tipoMonitoreo: '', mercado: '' }))
   }
 
-  // ── Derived values ─────────────────────────────────────────────────────────
+  // Called when user clicks a filterable cell in the table
+  const applyFromCell = (overrides: Partial<Filters>) => {
+    setHasSearched(true)
+    setTipoPrecio(resultTipo) // keep panel in sync
+    fetchData(1, sortDir, resultTipo, overrides)
+  }
+
+  const clearFilter = (key: keyof Filters) => {
+    fetchData(1, sortDir, resultTipo, { [key]: '' })
+  }
+
+  // ── Derived ────────────────────────────────────────────────────────────────
 
   const stats = (() => {
     if (!records.length) return null
@@ -235,6 +244,19 @@ export default function App() {
   const totalPages = Math.ceil(total / PAGE_SIZE)
   const from = (page - 1) * PAGE_SIZE + 1
   const to = Math.min(page * PAGE_SIZE, total)
+
+  // Active filter chips (only non-empty values)
+  const activeChips: { key: keyof Filters; label: string; value: string }[] = [
+    filters.producto    && { key: 'producto',      label: 'Producto',        value: filters.producto },
+    filters.region      && { key: 'region',         label: 'Región',          value: regionName(filters.region) },
+    filters.subsector   && { key: 'subsector',      label: 'Subsector',       value: filters.subsector },
+    filters.grupo       && { key: 'grupo',           label: 'Grupo',           value: filters.grupo },
+    filters.tipoMonitoreo && { key: 'tipoMonitoreo', label: 'Punto',          value: filters.tipoMonitoreo },
+    filters.mercado     && { key: 'mercado',         label: 'Mercado',         value: filters.mercado },
+  ].filter(Boolean) as { key: keyof Filters; label: string; value: string }[]
+
+  // Shared class for clickable cell content
+  const cellBtn = 'cursor-pointer hover:text-green-700 hover:underline underline-offset-2 transition-colors'
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -295,7 +317,6 @@ export default function App() {
                 </select>
               </div>
 
-              {/* Subsector: solo mayorista / Grupo: solo consumidor */}
               {tipoPrecio === 'mayorista' ? (
                 <div className="form-control">
                   <label className="label py-1">
@@ -303,8 +324,8 @@ export default function App() {
                   </label>
                   <select
                     className="select select-bordered select-sm"
-                    value={subsector}
-                    onChange={e => setSubsector(e.target.value)}
+                    value={filters.subsector}
+                    onChange={e => setFilters(f => ({ ...f, subsector: e.target.value }))}
                   >
                     <option value="">Todos</option>
                     <option value="Frutas">Frutas</option>
@@ -318,8 +339,8 @@ export default function App() {
                   </label>
                   <select
                     className="select select-bordered select-sm"
-                    value={grupo}
-                    onChange={e => setGrupo(e.target.value)}
+                    value={filters.grupo}
+                    onChange={e => setFilters(f => ({ ...f, grupo: e.target.value }))}
                   >
                     <option value="">Todos</option>
                     {GRUPOS_CONSUMIDOR.map(g => (
@@ -336,8 +357,8 @@ export default function App() {
                   </label>
                   <select
                     className="select select-bordered select-sm"
-                    value={tipoMonitoreo}
-                    onChange={e => setTipoMonitoreo(e.target.value)}
+                    value={filters.tipoMonitoreo}
+                    onChange={e => setFilters(f => ({ ...f, tipoMonitoreo: e.target.value }))}
                   >
                     <option value="">Todos</option>
                     {TIPOS_MONITOREO.map(t => (
@@ -353,8 +374,8 @@ export default function App() {
                 </label>
                 <select
                   className="select select-bordered select-sm"
-                  value={region}
-                  onChange={e => setRegion(e.target.value)}
+                  value={filters.region}
+                  onChange={e => setFilters(f => ({ ...f, region: e.target.value }))}
                 >
                   <option value="">Todas las regiones</option>
                   {REGIONS.map(r => (
@@ -373,11 +394,11 @@ export default function App() {
                   placeholder={
                     tipoPrecio === 'mayorista'
                       ? 'Ej: manzana, tomate, palta, uva...'
-                      : 'Ej: tomate, pollo, leche, pan...'
+                      : 'Ej: tomate, lechuga, manzana...'
                   }
                   className="input input-bordered input-sm"
-                  value={producto}
-                  onChange={e => setProducto(e.target.value)}
+                  value={filters.producto}
+                  onChange={e => setFilters(f => ({ ...f, producto: e.target.value }))}
                   onKeyDown={e => e.key === 'Enter' && handleSearch()}
                 />
               </div>
@@ -391,8 +412,7 @@ export default function App() {
               >
                 {loading
                   ? <span className="loading loading-spinner loading-sm" />
-                  : <Search size={16} />
-                }
+                  : <Search size={16} />}
                 Consultar
               </button>
             </div>
@@ -410,10 +430,7 @@ export default function App() {
         {!loading && error && (
           <div role="alert" className="alert alert-error mb-4 flex-wrap">
             <span>Error al cargar los datos: {error}</span>
-            <button
-              className="btn btn-sm btn-ghost gap-1"
-              onClick={() => fetchData(page, sortDir, resultTipo)}
-            >
+            <button className="btn btn-sm btn-ghost gap-1" onClick={() => fetchData(page, sortDir, resultTipo)}>
               <RefreshCw size={14} />
               Reintentar
             </button>
@@ -445,25 +462,51 @@ export default function App() {
         {/* ── Results ── */}
         {!loading && !error && records.length > 0 && (
           <>
-
             {/* Stats cards */}
             {stats && (
               <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 mb-4">
-                {(
-                  [
-                    { label: 'Total registros', value: total.toLocaleString('es-CL'), mono: false },
-                    { label: 'Precio promedio (pág.)', value: formatCLP(stats.avg), mono: true },
-                    { label: 'Precio mínimo (pág.)',   value: formatCLP(stats.min), mono: true },
-                    { label: 'Precio máximo (pág.)',   value: formatCLP(stats.max), mono: true },
-                  ] as const
-                ).map(({ label, value, mono }) => (
+                {([
+                  { label: 'Total registros',       value: total.toLocaleString('es-CL'), mono: false },
+                  { label: 'Precio promedio (pág.)', value: formatCLP(stats.avg), mono: true },
+                  { label: 'Precio mínimo (pág.)',   value: formatCLP(stats.min), mono: true },
+                  { label: 'Precio máximo (pág.)',   value: formatCLP(stats.max), mono: true },
+                ] as const).map(({ label, value, mono }) => (
                   <div key={label} className="bg-white rounded-xl shadow p-4 border border-gray-100">
                     <p className="text-xs text-gray-500 mb-1 uppercase tracking-wide">{label}</p>
-                    <p className={`text-xl font-bold text-green-700 ${mono ? 'font-mono' : ''}`}>
-                      {value}
-                    </p>
+                    <p className={`text-xl font-bold text-green-700 ${mono ? 'font-mono' : ''}`}>{value}</p>
                   </div>
                 ))}
+              </div>
+            )}
+
+            {/* Active filter chips */}
+            {activeChips.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2 mb-3">
+                <span className="text-xs text-gray-400 uppercase tracking-wide">Filtrando por:</span>
+                {activeChips.map(({ key, label, value }) => (
+                  <span
+                    key={key}
+                    className="inline-flex items-center gap-1 bg-green-100 text-green-800 text-xs font-medium px-2.5 py-1 rounded-full border border-green-200"
+                  >
+                    <span className="text-green-500 font-normal">{label}:</span>
+                    {value}
+                    <button
+                      className="ml-0.5 hover:text-red-500 transition-colors"
+                      onClick={() => clearFilter(key)}
+                      title={`Quitar filtro ${label}`}
+                    >
+                      <X size={11} />
+                    </button>
+                  </span>
+                ))}
+                {activeChips.length > 1 && (
+                  <button
+                    className="text-xs text-gray-400 hover:text-red-500 underline underline-offset-2 transition-colors"
+                    onClick={() => fetchData(1, sortDir, resultTipo, EMPTY_FILTERS)}
+                  >
+                    Limpiar todo
+                  </button>
+                )}
               </div>
             )}
 
@@ -503,21 +546,33 @@ export default function App() {
                       ? (records as MayoristaRecord[]).map(r => (
                           <tr key={r._id} className="hover">
                             <td className="whitespace-nowrap text-xs text-gray-500">{r.Fecha}</td>
-                            <td className="font-semibold text-sm">{r.Producto}</td>
+                            <td
+                              className={`font-semibold text-sm ${cellBtn}`}
+                              onClick={() => applyFromCell({ producto: r.Producto })}
+                              title="Filtrar por este producto"
+                            >
+                              {r.Producto}
+                            </td>
                             <td className="text-sm">{r['Variedad / Tipo'] || '—'}</td>
                             <td className="text-sm">{r.Calidad || '—'}</td>
-                            <td className="text-sm">{r.Mercado}</td>
-                            <td className="text-sm whitespace-nowrap">{r.Region}</td>
+                            <td
+                              className={`text-sm ${cellBtn}`}
+                              onClick={() => applyFromCell({ mercado: r.Mercado })}
+                              title="Filtrar por este mercado"
+                            >
+                              {r.Mercado}
+                            </td>
+                            <td
+                              className={`text-sm whitespace-nowrap ${cellBtn}`}
+                              onClick={() => applyFromCell({ region: r['ID region'] })}
+                              title="Filtrar por esta región"
+                            >
+                              {r.Region}
+                            </td>
                             <td className="text-xs text-gray-600">{r['Unidad de comercializacion']}</td>
-                            <td className="text-right font-mono text-sm text-green-700">
-                              {formatPrice(r['Precio minimo'])}
-                            </td>
-                            <td className="text-right font-mono text-sm text-green-700">
-                              {formatPrice(r['Precio maximo'])}
-                            </td>
-                            <td className="text-right font-mono text-sm text-green-700 font-bold">
-                              {formatPrice(r['Precio promedio'])}
-                            </td>
+                            <td className="text-right font-mono text-sm text-green-700">{formatPrice(r['Precio minimo'])}</td>
+                            <td className="text-right font-mono text-sm text-green-700">{formatPrice(r['Precio maximo'])}</td>
+                            <td className="text-right font-mono text-sm text-green-700 font-bold">{formatPrice(r['Precio promedio'])}</td>
                             <td className="text-right text-sm">{r.Volumen || '—'}</td>
                           </tr>
                         ))
@@ -525,21 +580,39 @@ export default function App() {
                           <tr key={r._id} className="hover">
                             <td className="whitespace-nowrap text-xs text-gray-500">{r['Fecha inicio']}</td>
                             <td className="whitespace-nowrap text-xs text-gray-500">{r['Fecha termino']}</td>
-                            <td className="font-semibold text-sm">{r.Producto}</td>
+                            <td
+                              className={`font-semibold text-sm ${cellBtn}`}
+                              onClick={() => applyFromCell({ producto: r.Producto.split('|')[0].trim() })}
+                              title="Filtrar por este producto"
+                            >
+                              {r.Producto}
+                            </td>
                             <td className="text-sm">{r.Sector || '—'}</td>
-                            <td className="text-sm">{r.Grupo || '—'}</td>
-                            <td className="text-sm">{r['Tipo de punto monitoreo'] || '—'}</td>
-                            <td className="text-sm whitespace-nowrap">{r.Region}</td>
+                            <td
+                              className={`text-sm ${cellBtn}`}
+                              onClick={() => applyFromCell({ grupo: r.Grupo })}
+                              title="Filtrar por este grupo"
+                            >
+                              {r.Grupo || '—'}
+                            </td>
+                            <td
+                              className={`text-sm ${cellBtn}`}
+                              onClick={() => applyFromCell({ tipoMonitoreo: r['Tipo de punto monitoreo'] })}
+                              title="Filtrar por tipo de punto"
+                            >
+                              {r['Tipo de punto monitoreo'] || '—'}
+                            </td>
+                            <td
+                              className={`text-sm whitespace-nowrap ${cellBtn}`}
+                              onClick={() => applyFromCell({ region: r['ID region'] })}
+                              title="Filtrar por esta región"
+                            >
+                              {r.Region}
+                            </td>
                             <td className="text-xs text-gray-600">{r.Unidad}</td>
-                            <td className="text-right font-mono text-sm text-green-700">
-                              {formatPrice(r['Precio minimo'])}
-                            </td>
-                            <td className="text-right font-mono text-sm text-green-700">
-                              {formatPrice(r['Precio maximo'])}
-                            </td>
-                            <td className="text-right font-mono text-sm text-green-700 font-bold">
-                              {formatPrice(r['Precio promedio'])}
-                            </td>
+                            <td className="text-right font-mono text-sm text-green-700">{formatPrice(r['Precio minimo'])}</td>
+                            <td className="text-right font-mono text-sm text-green-700">{formatPrice(r['Precio maximo'])}</td>
+                            <td className="text-right font-mono text-sm text-green-700 font-bold">{formatPrice(r['Precio promedio'])}</td>
                           </tr>
                         ))
                     }
@@ -553,50 +626,29 @@ export default function App() {
                   {from.toLocaleString('es-CL')}–{to.toLocaleString('es-CL')} de{' '}
                   <strong>{total.toLocaleString('es-CL')}</strong> registros
                 </span>
-
                 <div className="join">
-                  <button
-                    className="join-item btn btn-sm"
-                    disabled={page <= 1}
-                    onClick={() => fetchData(page - 1, sortDir, resultTipo)}
-                  >
-                    «
-                  </button>
-
+                  <button className="join-item btn btn-sm" disabled={page <= 1}
+                    onClick={() => fetchData(page - 1, sortDir, resultTipo)}>«</button>
                   {pageWindow(page, totalPages).map(p => (
                     <button
                       key={p}
                       className={`join-item btn btn-sm ${p === page ? 'btn-success text-white' : ''}`}
                       onClick={() => fetchData(p, sortDir, resultTipo)}
-                    >
-                      {p}
-                    </button>
+                    >{p}</button>
                   ))}
-
-                  <button
-                    className="join-item btn btn-sm"
-                    disabled={page >= totalPages}
-                    onClick={() => fetchData(page + 1, sortDir, resultTipo)}
-                  >
-                    »
-                  </button>
+                  <button className="join-item btn btn-sm" disabled={page >= totalPages}
+                    onClick={() => fetchData(page + 1, sortDir, resultTipo)}>»</button>
                 </div>
               </div>
             </div>
-
           </>
         )}
       </main>
 
-      {/* Footer */}
       <footer className="bg-green-800 text-green-200 text-center py-3 text-sm mt-8">
         Datos obtenidos desde{' '}
-        <a
-          href="https://datos.odepa.gob.cl"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="underline underline-offset-2 hover:text-white transition-colors"
-        >
+        <a href="https://datos.odepa.gob.cl" target="_blank" rel="noopener noreferrer"
+          className="underline underline-offset-2 hover:text-white transition-colors">
           datos.odepa.gob.cl
         </a>
         {' '}· ODEPA – Ministerio de Agricultura de Chile
