@@ -16,6 +16,22 @@ const RESOURCE_IDS = {
   },
 } as const
 
+// Mayorista uses "Fecha"; consumidor uses "Fecha inicio"
+const SORT_FIELD: Record<TipoPrecio, string> = {
+  mayorista: 'Fecha',
+  consumidor: 'Fecha inicio',
+}
+
+const GRUPOS_CONSUMIDOR = [
+  'Frutas',
+  'Hortalizas',
+  'Carne bovina',
+  'Carne de Cerdo - Ave - Cordero',
+  'Lácteos - Huevos - Margarinas',
+  'Abarrotes y otros',
+  'Pan',
+]
+
 const REGIONS = [
   { id: 1,  name: 'Tarapacá' },
   { id: 2,  name: 'Antofagasta' },
@@ -43,10 +59,10 @@ const API_BASE = '/api/search'
 type TipoPrecio = 'mayorista' | 'consumidor'
 type Anio = 2024 | 2025 | 2026
 
-interface PriceRecord {
+interface MayoristaRecord {
   _id: number
   Fecha: string
-  'ID region': number
+  'ID region': string
   Region: string
   Mercado: string
   Subsector: string
@@ -60,6 +76,27 @@ interface PriceRecord {
   'Precio maximo': string
   'Precio promedio': string
 }
+
+interface ConsumidorRecord {
+  _id: number
+  Anio: string
+  Mes: string
+  Semana: string
+  'Fecha inicio': string
+  'Fecha termino': string
+  'ID region': string
+  Region: string
+  Sector: string
+  'Tipo de punto monitoreo': string
+  Grupo: string
+  Producto: string
+  Unidad: string
+  'Precio minimo': string
+  'Precio maximo': string
+  'Precio promedio': string
+}
+
+type PriceRecord = MayoristaRecord | ConsumidorRecord
 
 interface ApiResponse {
   result: {
@@ -102,6 +139,7 @@ export default function App() {
   const [tipoPrecio, setTipoPrecio] = useState<TipoPrecio>('mayorista')
   const [anio, setAnio] = useState<Anio>(2026)
   const [subsector, setSubsector] = useState('')
+  const [grupo, setGrupo] = useState('')
   const [region, setRegion] = useState('')
   const [producto, setProducto] = useState('')
 
@@ -113,35 +151,45 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [hasSearched, setHasSearched] = useState(false)
   const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc')
+  // tipo that was used for the currently displayed results
+  const [resultTipo, setResultTipo] = useState<TipoPrecio>('mayorista')
 
   // ── Fetch ──────────────────────────────────────────────────────────────────
 
-  const buildUrl = (pageNum: number, sort: 'desc' | 'asc'): string => {
-    const resourceId = RESOURCE_IDS[tipoPrecio][anio]
+  const buildUrl = (pageNum: number, sort: 'desc' | 'asc', tipo: TipoPrecio): string => {
+    const resourceId = RESOURCE_IDS[tipo][anio]
     const params = new URLSearchParams({
       resource_id: resourceId,
       limit: String(PAGE_SIZE),
       offset: String((pageNum - 1) * PAGE_SIZE),
     })
     if (producto.trim()) params.set('q', JSON.stringify({ Producto: producto.trim() }))
+
     const filters: Record<string, string | number> = {}
-    if (subsector) filters['Subsector'] = subsector
+    if (tipo === 'mayorista' && subsector)   filters['Subsector'] = subsector
+    if (tipo === 'consumidor' && grupo)       filters['Grupo'] = grupo
     if (region) filters['ID region'] = Number(region)
     if (Object.keys(filters).length > 0) params.set('filters', JSON.stringify(filters))
-    params.set('sort', `Fecha ${sort}`)
+
+    params.set('sort', `${SORT_FIELD[tipo]} ${sort}`)
     return `${API_BASE}?${params.toString()}`
   }
 
-  const fetchData = async (pageNum: number, sort: 'desc' | 'asc' = sortDir) => {
+  const fetchData = async (
+    pageNum: number,
+    sort: 'desc' | 'asc' = sortDir,
+    tipo: TipoPrecio = resultTipo,
+  ) => {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch(buildUrl(pageNum, sort))
+      const res = await fetch(buildUrl(pageNum, sort, tipo))
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data: ApiResponse = await res.json()
       setRecords(data.result.records)
       setTotal(data.result.total)
       setPage(pageNum)
+      setResultTipo(tipo)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error de conexión')
     } finally {
@@ -151,13 +199,20 @@ export default function App() {
 
   const handleSearch = () => {
     setHasSearched(true)
-    fetchData(1, sortDir)
+    fetchData(1, sortDir, tipoPrecio)
   }
 
   const toggleSort = () => {
     const next = sortDir === 'desc' ? 'asc' : 'desc'
     setSortDir(next)
-    fetchData(page, next)
+    fetchData(page, next, resultTipo)
+  }
+
+  const handleTipoChange = (next: TipoPrecio) => {
+    setTipoPrecio(next)
+    // reset category filters that are tipo-specific
+    setSubsector('')
+    setGrupo('')
   }
 
   // ── Derived values ─────────────────────────────────────────────────────────
@@ -215,7 +270,7 @@ export default function App() {
                 <select
                   className="select select-bordered select-sm"
                   value={tipoPrecio}
-                  onChange={e => setTipoPrecio(e.target.value as TipoPrecio)}
+                  onChange={e => handleTipoChange(e.target.value as TipoPrecio)}
                 >
                   <option value="mayorista">Mayorista</option>
                   <option value="consumidor">Consumidor</option>
@@ -237,20 +292,39 @@ export default function App() {
                 </select>
               </div>
 
-              <div className="form-control">
-                <label className="label py-1">
-                  <span className="label-text font-semibold">Subsector</span>
-                </label>
-                <select
-                  className="select select-bordered select-sm"
-                  value={subsector}
-                  onChange={e => setSubsector(e.target.value)}
-                >
-                  <option value="">Todos</option>
-                  <option value="Frutas">Frutas</option>
-                  <option value="Hortalizas y tubérculos">Hortalizas y tubérculos</option>
-                </select>
-              </div>
+              {/* Subsector: solo mayorista / Grupo: solo consumidor */}
+              {tipoPrecio === 'mayorista' ? (
+                <div className="form-control">
+                  <label className="label py-1">
+                    <span className="label-text font-semibold">Subsector</span>
+                  </label>
+                  <select
+                    className="select select-bordered select-sm"
+                    value={subsector}
+                    onChange={e => setSubsector(e.target.value)}
+                  >
+                    <option value="">Todos</option>
+                    <option value="Frutas">Frutas</option>
+                    <option value="Hortalizas y tubérculos">Hortalizas y tubérculos</option>
+                  </select>
+                </div>
+              ) : (
+                <div className="form-control">
+                  <label className="label py-1">
+                    <span className="label-text font-semibold">Grupo</span>
+                  </label>
+                  <select
+                    className="select select-bordered select-sm"
+                    value={grupo}
+                    onChange={e => setGrupo(e.target.value)}
+                  >
+                    <option value="">Todos</option>
+                    {GRUPOS_CONSUMIDOR.map(g => (
+                      <option key={g} value={g}>{g}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               <div className="form-control">
                 <label className="label py-1">
@@ -275,7 +349,11 @@ export default function App() {
                 </label>
                 <input
                   type="text"
-                  placeholder="Ej: manzana, tomate, palta, uva..."
+                  placeholder={
+                    tipoPrecio === 'mayorista'
+                      ? 'Ej: manzana, tomate, palta, uva...'
+                      : 'Ej: tomate, pollo, leche, pan...'
+                  }
                   className="input input-bordered input-sm"
                   value={producto}
                   onChange={e => setProducto(e.target.value)}
@@ -313,7 +391,7 @@ export default function App() {
             <span>Error al cargar los datos: {error}</span>
             <button
               className="btn btn-sm btn-ghost gap-1"
-              onClick={() => fetchData(page)}
+              onClick={() => fetchData(page, sortDir, resultTipo)}
             >
               <RefreshCw size={14} />
               Reintentar
@@ -380,44 +458,70 @@ export default function App() {
                           onClick={toggleSort}
                           title="Ordenar por fecha"
                         >
-                          Fecha
+                          {resultTipo === 'consumidor' ? 'Fecha inicio' : 'Fecha'}
                           {sortDir === 'desc' ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
                         </button>
                       </th>
+                      {resultTipo === 'consumidor' && <th>Fecha término</th>}
                       <th>Producto</th>
-                      <th>Variedad</th>
-                      <th>Calidad</th>
-                      <th>Mercado</th>
+                      {resultTipo === 'mayorista' && <th>Variedad</th>}
+                      {resultTipo === 'mayorista' && <th>Calidad</th>}
+                      {resultTipo === 'mayorista' ? <th>Mercado</th> : <th>Sector</th>}
+                      {resultTipo === 'consumidor' && <th>Grupo</th>}
+                      {resultTipo === 'consumidor' && <th>Punto monitoreo</th>}
                       <th>Región</th>
-                      <th>Unidad comerc.</th>
+                      <th>{resultTipo === 'consumidor' ? 'Unidad' : 'Unidad comerc.'}</th>
                       <th className="text-right">Precio mín.</th>
                       <th className="text-right">Precio máx.</th>
                       <th className="text-right">Precio prom.</th>
-                      <th className="text-right">Volumen</th>
+                      {resultTipo === 'mayorista' && <th className="text-right">Volumen</th>}
                     </tr>
                   </thead>
                   <tbody>
-                    {records.map(r => (
-                      <tr key={r._id} className="hover">
-                        <td className="whitespace-nowrap text-xs text-gray-500">{r.Fecha}</td>
-                        <td className="font-semibold text-sm">{r.Producto}</td>
-                        <td className="text-sm">{r['Variedad / Tipo'] || '—'}</td>
-                        <td className="text-sm">{r.Calidad || '—'}</td>
-                        <td className="text-sm">{r.Mercado}</td>
-                        <td className="text-sm whitespace-nowrap">{r.Region}</td>
-                        <td className="text-xs text-gray-600">{r['Unidad de comercializacion']}</td>
-                        <td className="text-right font-mono text-sm text-green-700">
-                          {formatPrice(r['Precio minimo'])}
-                        </td>
-                        <td className="text-right font-mono text-sm text-green-700">
-                          {formatPrice(r['Precio maximo'])}
-                        </td>
-                        <td className="text-right font-mono text-sm text-green-700 font-bold">
-                          {formatPrice(r['Precio promedio'])}
-                        </td>
-                        <td className="text-right text-sm">{r.Volumen || '—'}</td>
-                      </tr>
-                    ))}
+                    {resultTipo === 'mayorista'
+                      ? (records as MayoristaRecord[]).map(r => (
+                          <tr key={r._id} className="hover">
+                            <td className="whitespace-nowrap text-xs text-gray-500">{r.Fecha}</td>
+                            <td className="font-semibold text-sm">{r.Producto}</td>
+                            <td className="text-sm">{r['Variedad / Tipo'] || '—'}</td>
+                            <td className="text-sm">{r.Calidad || '—'}</td>
+                            <td className="text-sm">{r.Mercado}</td>
+                            <td className="text-sm whitespace-nowrap">{r.Region}</td>
+                            <td className="text-xs text-gray-600">{r['Unidad de comercializacion']}</td>
+                            <td className="text-right font-mono text-sm text-green-700">
+                              {formatPrice(r['Precio minimo'])}
+                            </td>
+                            <td className="text-right font-mono text-sm text-green-700">
+                              {formatPrice(r['Precio maximo'])}
+                            </td>
+                            <td className="text-right font-mono text-sm text-green-700 font-bold">
+                              {formatPrice(r['Precio promedio'])}
+                            </td>
+                            <td className="text-right text-sm">{r.Volumen || '—'}</td>
+                          </tr>
+                        ))
+                      : (records as ConsumidorRecord[]).map(r => (
+                          <tr key={r._id} className="hover">
+                            <td className="whitespace-nowrap text-xs text-gray-500">{r['Fecha inicio']}</td>
+                            <td className="whitespace-nowrap text-xs text-gray-500">{r['Fecha termino']}</td>
+                            <td className="font-semibold text-sm">{r.Producto}</td>
+                            <td className="text-sm">{r.Sector || '—'}</td>
+                            <td className="text-sm">{r.Grupo || '—'}</td>
+                            <td className="text-sm">{r['Tipo de punto monitoreo'] || '—'}</td>
+                            <td className="text-sm whitespace-nowrap">{r.Region}</td>
+                            <td className="text-xs text-gray-600">{r.Unidad}</td>
+                            <td className="text-right font-mono text-sm text-green-700">
+                              {formatPrice(r['Precio minimo'])}
+                            </td>
+                            <td className="text-right font-mono text-sm text-green-700">
+                              {formatPrice(r['Precio maximo'])}
+                            </td>
+                            <td className="text-right font-mono text-sm text-green-700 font-bold">
+                              {formatPrice(r['Precio promedio'])}
+                            </td>
+                          </tr>
+                        ))
+                    }
                   </tbody>
                 </table>
               </div>
@@ -433,7 +537,7 @@ export default function App() {
                   <button
                     className="join-item btn btn-sm"
                     disabled={page <= 1}
-                    onClick={() => fetchData(page - 1)}
+                    onClick={() => fetchData(page - 1, sortDir, resultTipo)}
                   >
                     «
                   </button>
@@ -442,7 +546,7 @@ export default function App() {
                     <button
                       key={p}
                       className={`join-item btn btn-sm ${p === page ? 'btn-success text-white' : ''}`}
-                      onClick={() => fetchData(p)}
+                      onClick={() => fetchData(p, sortDir, resultTipo)}
                     >
                       {p}
                     </button>
@@ -451,7 +555,7 @@ export default function App() {
                   <button
                     className="join-item btn btn-sm"
                     disabled={page >= totalPages}
-                    onClick={() => fetchData(page + 1)}
+                    onClick={() => fetchData(page + 1, sortDir, resultTipo)}
                   >
                     »
                   </button>
