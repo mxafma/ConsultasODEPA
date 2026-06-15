@@ -23,6 +23,7 @@ interface Props {
 type Basis = 'kg' | 'u' | 'raw'
 interface TrendPoint { fecha: string; value: number }
 interface Trend { data: TrendPoint[]; basis: Basis; label: string }
+interface ConsPuntoData { val: number; date: string; basis: Basis }
 
 const sfx = (b: Basis): string => (b === 'kg' ? '/kg' : b === 'u' ? '/u' : '')
 const noun = (b: Basis): string => (b === 'kg' ? 'kg' : 'unidad')
@@ -79,9 +80,7 @@ export default function ProductDetailModal({ product, anio, region, subsector, r
   const [trend, setTrend] = useState<Trend | null>(null)
   const [mayVal, setMayVal] = useState<number | null>(null)
   const [mayDate, setMayDate] = useState<string | null>(null)
-  const [consVal, setConsVal] = useState<number | null>(null)
-  const [consDate, setConsDate] = useState<string | null>(null)
-  const [consBasis, setConsBasis] = useState<Basis | null>(null)
+  const [consByPunto, setConsByPunto] = useState<Record<string, ConsPuntoData>>({})
   const [consChecked, setConsChecked] = useState(false)
 
   useEffect(() => {
@@ -91,7 +90,7 @@ export default function ProductDetailModal({ product, anio, region, subsector, r
     async function load() {
       setLoading(true); setError(null)
       setTrend(null); setMayVal(null); setMayDate(null)
-      setConsVal(null); setConsDate(null); setConsBasis(null); setConsChecked(false)
+      setConsByPunto({}); setConsChecked(false)
       try {
         // ── Mayorista trend ──
         const mayRid = RESOURCE_IDS.mayorista[anio]
@@ -144,7 +143,7 @@ export default function ProductDetailModal({ product, anio, region, subsector, r
           const cf: Record<string, unknown> = { Producto: consNames }
           if (region) cf['ID region'] = Number(region)
           const curl = searchUrl(consRid, {
-            fields: 'Fecha inicio,Precio promedio,Unidad',
+            fields: 'Fecha inicio,Precio promedio,Unidad,Tipo de punto monitoreo',
             filters: cf, sort: 'Fecha inicio desc', limit: 500,
           })
           const cres = await fetch(curl)
@@ -153,13 +152,20 @@ export default function ProductDetailModal({ product, anio, region, subsector, r
             if (crows.length) {
               const latest = crows[0]['Fecha inicio']
               const week = crows.filter(r => r['Fecha inicio'] === latest)
-              const cbasis = chooseBasis(week.map(r => r['Precio promedio']), week.map(r => r.Unidad))
-              const vals = week
-                .map(r => rowValue(r['Precio promedio'], r.Unidad, cbasis))
-                .filter((v): v is number => v != null && v > 0)
-              if (vals.length && !cancelled) {
-                setConsVal(Math.round(avg(vals))); setConsDate(latest); setConsBasis(cbasis)
+              const byPunto = new Map<string, ConsumidorRecord[]>()
+              for (const r of week) {
+                const punto = r['Tipo de punto monitoreo'] || 'Otros'
+                byPunto.set(punto, [...(byPunto.get(punto) ?? []), r])
               }
+              const result: Record<string, ConsPuntoData> = {}
+              for (const [punto, rows] of byPunto) {
+                const cbasis = chooseBasis(rows.map(r => r['Precio promedio']), rows.map(r => r.Unidad))
+                const vals = rows
+                  .map(r => rowValue(r['Precio promedio'], r.Unidad, cbasis))
+                  .filter((v): v is number => v != null && v > 0)
+                if (vals.length) result[punto] = { val: Math.round(avg(vals)), date: latest, basis: cbasis }
+              }
+              if (!cancelled) setConsByPunto(result)
             }
           }
         }
@@ -176,11 +182,11 @@ export default function ProductDetailModal({ product, anio, region, subsector, r
   }, [product, anio, region, subsector])
 
   const mayBasis = trend?.basis ?? null
-  // Margin only when both sides share the same comparable basis ($/kg or $/u).
-  const comparable = mayVal != null && consVal != null && mayBasis != null
-    && mayBasis !== 'raw' && mayBasis === consBasis
-  const margin = comparable ? (consVal as number) - (mayVal as number) : null
-  const marginPct = margin != null && mayVal ? (margin / mayVal) * 100 : null
+  const marginFor = (data: ConsPuntoData | undefined) => {
+    if (!data || mayVal == null || mayBasis == null || mayBasis === 'raw') return null
+    if (mayBasis !== data.basis) return null
+    return data.val - mayVal
+  }
   const scope = regionLabel ? `Región: ${regionLabel}` : 'Todas las regiones'
 
   return (
@@ -219,33 +225,30 @@ export default function ProductDetailModal({ product, anio, region, subsector, r
                 </p>
                 <p className="text-xs text-gray-400">{mayDate ?? 'sin precio comparable'}</p>
               </div>
-              <div className="bg-amber-50 rounded-xl p-3 border border-amber-100">
-                <p className="text-xs text-gray-500 uppercase tracking-wide">Consumidor (público)</p>
-                <p className="text-xl font-bold text-amber-700 font-mono">
-                  {consVal != null && consBasis ? `${formatCLP(consVal)}${sfx(consBasis)}` : '—'}
-                </p>
-                <p className="text-xs text-gray-400">
-                  {consVal != null ? `semana ${consDate}` : consChecked ? 'sin datos de consumidor' : ''}
-                </p>
-              </div>
-              <div className="bg-gray-50 rounded-xl p-3 border border-gray-200">
-                <p className="text-xs text-gray-500 uppercase tracking-wide">Margen referencial</p>
-                {margin != null && mayBasis ? (
-                  <>
-                    <p className={`text-xl font-bold font-mono flex items-center gap-1 ${margin >= 0 ? 'text-green-700' : 'text-red-600'}`}>
-                      {margin >= 0 ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
-                      {formatCLP(Math.abs(margin))}{sfx(mayBasis)}
+              {(['Feria libre', 'Supermercado'] as const).map(punto => {
+                const data = consByPunto[punto]
+                const m = marginFor(data)
+                const mPct = m != null && mayVal ? (m / mayVal) * 100 : null
+                return (
+                  <div key={punto} className="bg-amber-50 rounded-xl p-3 border border-amber-100">
+                    <p className="text-xs text-gray-500 uppercase tracking-wide">Consumidor · {punto}</p>
+                    <p className="text-xl font-bold text-amber-700 font-mono">
+                      {data ? `${formatCLP(data.val)}${sfx(data.basis)}` : '—'}
                     </p>
-                    <p className="text-xs text-gray-400">
-                      {marginPct != null ? `${marginPct >= 0 ? '+' : ''}${marginPct.toFixed(0)}% · por ${noun(mayBasis)}` : ''}
-                    </p>
-                  </>
-                ) : (
-                  <p className="text-sm text-gray-400 mt-1">
-                    {consVal != null && mayBasis !== consBasis ? 'Bases distintas (kg vs unidad)' : 'No comparable'}
-                  </p>
-                )}
-              </div>
+                    {data && m != null && mayBasis ? (
+                      <p className={`text-xs flex items-center gap-0.5 mt-0.5 ${m >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                        {m >= 0 ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
+                        {formatCLP(Math.abs(m))}{sfx(mayBasis)}
+                        {mPct != null ? ` (${mPct >= 0 ? '+' : ''}${mPct.toFixed(0)}%)` : ''}
+                      </p>
+                    ) : (
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        {consChecked && !data ? 'sin datos' : data && m == null ? 'base distinta' : ''}
+                      </p>
+                    )}
+                  </div>
+                )
+              })}
             </div>
 
             {/* ── Trend chart ── */}

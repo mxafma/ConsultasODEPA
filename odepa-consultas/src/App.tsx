@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from 'react'
+import { lazy, Suspense, useState, useRef } from 'react'
 import { Package, Search, RefreshCw, ChevronUp, ChevronDown, X, LineChart } from 'lucide-react'
 
 // Lazy-loaded so the charting library (recharts) is only fetched when a user
@@ -13,6 +13,47 @@ import {
   getCatalog, matchProducts, normalizedPrice, unitToKilos, unitToPieces, basisLabel, basisSuffix,
   baseProductName,
 } from './lib/odepa'
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+const STATS_LIMIT = 2000
+
+interface Stats {
+  basis: PriceBasis
+  comparable: number
+  avg: number
+  min: number
+  max: number
+}
+
+function computeStats(recs: PriceRecord[], tipo: TipoPrecio): Stats | null {
+  if (!recs.length) return null
+  const getUnit = (r: PriceRecord): string =>
+    tipo === 'mayorista'
+      ? (r as MayoristaRecord)['Unidad de comercializacion']
+      : (r as ConsumidorRecord).Unidad
+  const norms = recs
+    .map(r => normalizedPrice(r['Precio promedio'], getUnit(r)))
+    .filter((n): n is NormalizedPrice => n != null)
+  if (!norms.length) return null
+  const kgCount = norms.filter(n => n.basis === 'kg').length
+  const basis: PriceBasis = kgCount >= norms.length - kgCount ? 'kg' : 'u'
+  const vals = (field: 'Precio promedio' | 'Precio minimo' | 'Precio maximo') =>
+    recs
+      .map(r => normalizedPrice(r[field], getUnit(r)))
+      .filter((n): n is NormalizedPrice => n != null && n.basis === basis && n.value > 0)
+      .map(n => n.value)
+  const avgs = vals('Precio promedio')
+  const mins = vals('Precio minimo')
+  const maxs = vals('Precio maximo')
+  return {
+    basis,
+    comparable: avgs.length,
+    avg: avgs.length ? avgs.reduce((a, b) => a + b) / avgs.length : 0,
+    min: mins.length ? Math.min(...mins) : 0,
+    max: maxs.length ? Math.max(...maxs) : 0,
+  }
+}
 
 // ── Component ────────────────────────────────────────────────────────────────
 
@@ -41,6 +82,10 @@ export default function App() {
 
   // Product opened in the detail modal (trend + margin), by base name.
   const [detailProduct, setDetailProduct] = useState<string | null>(null)
+
+  // Global stats: fetched for the full result set when total ≤ STATS_LIMIT.
+  const [globalStats, setGlobalStats] = useState<Stats | null>(null)
+  const statsGenRef = useRef(0)
 
   // ── Fetch ──────────────────────────────────────────────────────────────────
 
@@ -108,6 +153,41 @@ export default function App() {
       setTotal(data.result.total)
       setPage(pageNum)
       setResultTipo(tipo)
+
+      // ── Global stats (background fetch, page 1 only) ──────────────────────
+      if (pageNum === 1) {
+        setGlobalStats(null)
+        if (data.result.total > 0 && data.result.total <= STATS_LIMIT) {
+          const gen = ++statsGenRef.current
+          const statsFields = tipo === 'mayorista'
+            ? 'Precio promedio,Precio minimo,Precio maximo,Unidad de comercializacion'
+            : 'Precio promedio,Precio minimo,Precio maximo,Unidad'
+          const sp = new URLSearchParams({
+            resource_id: RESOURCE_IDS[tipo][anio],
+            limit: String(data.result.total),
+            offset: '0',
+            fields: statsFields,
+          })
+          const sf: Record<string, string | number | string[]> = {}
+          if (productMatches && productMatches.length)  sf['Producto'] = productMatches
+          if (tipo === 'mayorista' && f.subsector)      sf['Subsector'] = f.subsector
+          if (tipo === 'mayorista' && f.mercado)         sf['Mercado'] = f.mercado
+          if (tipo === 'mayorista' && f.variedad)        sf['Variedad / Tipo'] = f.variedad
+          if (tipo === 'mayorista' && f.calidad)         sf['Calidad'] = f.calidad
+          if (tipo === 'consumidor' && f.grupo)          sf['Grupo'] = f.grupo
+          if (tipo === 'consumidor' && f.tipoMonitoreo)  sf['Tipo de punto monitoreo'] = f.tipoMonitoreo
+          if (tipo === 'consumidor' && f.sector)         sf['Sector'] = f.sector
+          if (f.region)                                  sf['ID region'] = Number(f.region)
+          if (Object.keys(sf).length) sp.set('filters', JSON.stringify(sf))
+          fetch(`${API_BASE}?${sp}`)
+            .then(r => r.json())
+            .then((d: ApiResponse) => {
+              if (gen !== statsGenRef.current) return
+              setGlobalStats(computeStats(d.result.records, tipo))
+            })
+            .catch(() => {})
+        }
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error de conexión')
     } finally {
@@ -144,38 +224,17 @@ export default function App() {
 
   // ── Derived ────────────────────────────────────────────────────────────────
 
-  // Commercialization unit for a record (differs by tipo).
+  // Commercialization unit for a record (differs by tipo); used in renderCompCell.
   const unitOf = (r: PriceRecord): string =>
     resultTipo === 'mayorista'
       ? (r as MayoristaRecord)['Unidad de comercializacion']
       : (r as ConsumidorRecord).Unidad
 
-  // Stats on the comparable price. Each row is $/kg or $/u; we pick the dominant
-  // basis of the page and average only rows that share it (mixing kg and u would
-  // be meaningless). In a single-product view rows almost always share one basis.
-  const stats = (() => {
-    if (!records.length) return null
-    const norms = records
-      .map(r => normalizedPrice(r['Precio promedio'], unitOf(r)))
-      .filter((n): n is NormalizedPrice => n != null)
-    if (!norms.length) return null
-    const kgCount = norms.filter(n => n.basis === 'kg').length
-    const basis: PriceBasis = kgCount >= norms.length - kgCount ? 'kg' : 'u'
-
-    const vals = (field: 'Precio promedio' | 'Precio minimo' | 'Precio maximo') =>
-      records
-        .map(r => normalizedPrice(r[field], unitOf(r)))
-        .filter((n): n is NormalizedPrice => n != null && n.basis === basis && n.value > 0)
-        .map(n => n.value)
-    const avgs = vals('Precio promedio'); const mins = vals('Precio minimo'); const maxs = vals('Precio maximo')
-    return {
-      basis,
-      comparable: avgs.length,
-      avg: avgs.length ? avgs.reduce((a, b) => a + b) / avgs.length : 0,
-      min: mins.length ? Math.min(...mins) : 0,
-      max: maxs.length ? Math.max(...maxs) : 0,
-    }
-  })()
+  // Page-level stats (fallback when global stats aren't available).
+  const stats = computeStats(records, resultTipo)
+  // Prefer global stats (full result set) when available.
+  const displayStats = globalStats ?? stats
+  const isGlobal = globalStats != null
 
   const totalPages = Math.ceil(total / PAGE_SIZE)
   const from = (page - 1) * PAGE_SIZE + 1
@@ -439,14 +498,14 @@ export default function App() {
         {!loading && !error && records.length > 0 && (
           <>
             {/* Stats cards (comparable price: $/kg or $/u) */}
-            {stats && (
+            {displayStats && (
               <>
                 <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 mb-1">
                   {([
-                    { label: 'Total registros',                       value: total.toLocaleString('es-CL'),          mono: false },
-                    { label: `${basisLabel(stats.basis)} promedio (pág.)`, value: stats.avg ? formatCLP(stats.avg) : '—', mono: true },
-                    { label: `${basisLabel(stats.basis)} mínimo (pág.)`,   value: stats.min ? formatCLP(stats.min) : '—', mono: true },
-                    { label: `${basisLabel(stats.basis)} máximo (pág.)`,   value: stats.max ? formatCLP(stats.max) : '—', mono: true },
+                    { label: 'Total registros',                                      value: total.toLocaleString('es-CL'),                   mono: false },
+                    { label: `${basisLabel(displayStats.basis)} promedio${isGlobal ? '' : ' (pág.)'}`, value: displayStats.avg ? formatCLP(displayStats.avg) : '—', mono: true },
+                    { label: `${basisLabel(displayStats.basis)} mínimo${isGlobal ? '' : ' (pág.)'}`,   value: displayStats.min ? formatCLP(displayStats.min) : '—', mono: true },
+                    { label: `${basisLabel(displayStats.basis)} máximo${isGlobal ? '' : ' (pág.)'}`,   value: displayStats.max ? formatCLP(displayStats.max) : '—', mono: true },
                   ] as const).map(({ label, value, mono }) => (
                     <div key={label} className="bg-white rounded-xl shadow p-4 border border-gray-100">
                       <p className="text-xs text-gray-500 mb-1 uppercase tracking-wide">{label}</p>
@@ -455,8 +514,11 @@ export default function App() {
                   ))}
                 </div>
                 <p className="text-xs text-gray-400 mb-4">
-                  {basisLabel(stats.basis)} estimado sobre {stats.comparable} de {records.length} filas de la página
-                  {stats.basis === 'u' ? ' (producto vendido por unidad)' : ' con unidad convertible'}.
+                  {basisLabel(displayStats.basis)} estimado sobre {displayStats.comparable}{' '}
+                  {isGlobal
+                    ? `de ${total.toLocaleString('es-CL')} registros`
+                    : `de ${records.length} filas de la página${total > STATS_LIMIT ? ` — más de ${STATS_LIMIT.toLocaleString('es-CL')} registros, estadísticas parciales` : ''}`}
+                  {displayStats.basis === 'u' ? ' (producto vendido por unidad)' : ' con unidad convertible'}.
                 </p>
               </>
             )}
