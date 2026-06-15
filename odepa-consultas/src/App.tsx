@@ -117,7 +117,7 @@ export default function App() {
 
   const handleSearch = () => {
     setHasSearched(true)
-    fetchData(1, sortDir, tipoPrecio)
+    fetchData(1, sortDir, tipoPrecio, { variedad: '', calidad: '', sector: '' })
   }
 
   const toggleSort = () => {
