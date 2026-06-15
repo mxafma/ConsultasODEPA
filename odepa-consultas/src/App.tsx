@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Package, Search, RefreshCw, ChevronUp, ChevronDown, X } from 'lucide-react'
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -45,6 +45,8 @@ const REGIONS = [
 
 const PAGE_SIZE = 25
 const API_BASE = '/api/search'
+// Cap the IN-list passed to the API so a very broad term can't blow up the URL.
+const MAX_PRODUCT_MATCHES = 120
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -105,6 +107,11 @@ interface ApiResponse {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+// Strip accents + lowercase so "platano" matches "Plátano" (accent-insensitive).
+function normalize(s: string): string {
+  return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim()
+}
+
 function parsePrice(val: string): number {
   if (!val) return 0
   return parseFloat(val.replace(',', '.')) || 0
@@ -152,17 +159,45 @@ export default function App() {
   const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc')
   const [resultTipo, setResultTipo] = useState<TipoPrecio>('mayorista')
 
+  // Distinct product names per resource_id, used for accent-insensitive /
+  // partial product matching. Lazily fetched and cached for the session.
+  const catalogCache = useRef<Record<string, string[]>>({})
+
   // ── Fetch ──────────────────────────────────────────────────────────────────
 
-  const buildUrl = (pageNum: number, sort: 'desc' | 'asc', tipo: TipoPrecio, f: Filters): string => {
+  // Returns the full product catalogue for a resource, fetching it once.
+  const getCatalog = async (tipo: TipoPrecio): Promise<string[]> => {
+    const rid = RESOURCE_IDS[tipo][anio]
+    if (catalogCache.current[rid]) return catalogCache.current[rid]
+    const res = await fetch(`${API_BASE}?catalog=Producto&resource_id=${rid}`)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const data: { values?: string[] } = await res.json()
+    const values = data.values ?? []
+    catalogCache.current[rid] = values
+    return values
+  }
+
+  // Catalogue entries whose name contains the term, ignoring accents/case.
+  const matchProducts = (catalog: string[], term: string): string[] => {
+    const q = normalize(term)
+    return catalog.filter(p => normalize(p).includes(q)).slice(0, MAX_PRODUCT_MATCHES)
+  }
+
+  const buildUrl = (
+    pageNum: number,
+    sort: 'desc' | 'asc',
+    tipo: TipoPrecio,
+    f: Filters,
+    productMatches: string[] | null,
+  ): string => {
     const params = new URLSearchParams({
       resource_id: RESOURCE_IDS[tipo][anio],
       limit: String(PAGE_SIZE),
       offset: String((pageNum - 1) * PAGE_SIZE),
     })
-    if (f.producto.trim()) params.set('q', JSON.stringify({ Producto: f.producto.trim() }))
 
-    const apiFilters: Record<string, string | number> = {}
+    const apiFilters: Record<string, string | number | string[]> = {}
+    if (productMatches && productMatches.length)    apiFilters['Producto'] = productMatches
     if (tipo === 'mayorista' && f.subsector)       apiFilters['Subsector'] = f.subsector
     if (tipo === 'mayorista' && f.mercado)          apiFilters['Mercado'] = f.mercado
     if (tipo === 'consumidor' && f.grupo)           apiFilters['Grupo'] = f.grupo
@@ -186,7 +221,23 @@ export default function App() {
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch(buildUrl(pageNum, sort, tipo, f))
+      // Resolve the product term to matching catalogue names (accent/partial).
+      let productMatches: string[] | null = null
+      const term = f.producto.trim()
+      if (term) {
+        const catalog = await getCatalog(tipo)
+        productMatches = matchProducts(catalog, term)
+        if (productMatches.length === 0) {
+          // Nothing in the catalogue matches → no results, skip the API call.
+          setRecords([])
+          setTotal(0)
+          setPage(pageNum)
+          setResultTipo(tipo)
+          return
+        }
+      }
+
+      const res = await fetch(buildUrl(pageNum, sort, tipo, f, productMatches))
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data: ApiResponse = await res.json()
       setRecords(data.result.records)
@@ -387,7 +438,7 @@ export default function App() {
               <div className="form-control lg:col-span-2">
                 <label className="label py-1">
                   <span className="label-text font-semibold">Producto</span>
-                  <span className="label-text-alt text-gray-400">Presiona Enter para buscar</span>
+                  <span className="label-text-alt text-gray-400">Sin tildes y parcial · Enter para buscar</span>
                 </label>
                 <input
                   type="text"
