@@ -7,9 +7,11 @@ const ProductDetailModal = lazy(() => import('./components/ProductDetailModal'))
 import {
   type TipoPrecio, type Anio, type Filters,
   type MayoristaRecord, type ConsumidorRecord, type PriceRecord, type ApiResponse,
+  type PriceBasis, type NormalizedPrice,
   RESOURCE_IDS, SORT_FIELD, TIPOS_MONITOREO, GRUPOS_CONSUMIDOR, REGIONS, PAGE_SIZE, API_BASE,
   formatCLP, formatPrice, pageWindow, regionName,
-  getCatalog, matchProducts, pricePerKilo, unitToKilos, baseProductName,
+  getCatalog, matchProducts, normalizedPrice, unitToKilos, unitToPieces, basisLabel, basisSuffix,
+  baseProductName,
 } from './lib/odepa'
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -144,14 +146,26 @@ export default function App() {
       ? (r as MayoristaRecord)['Unidad de comercializacion']
       : (r as ConsumidorRecord).Unidad
 
-  // Stats computed on $/kg (only rows whose unit is convertible).
+  // Stats on the comparable price. Each row is $/kg or $/u; we pick the dominant
+  // basis of the page and average only rows that share it (mixing kg and u would
+  // be meaningless). In a single-product view rows almost always share one basis.
   const stats = (() => {
     if (!records.length) return null
-    const kg = (price: string, r: PriceRecord) => pricePerKilo(price, unitOf(r))
-    const avgs = records.map(r => kg(r['Precio promedio'], r)).filter((v): v is number => v != null && v > 0)
-    const mins = records.map(r => kg(r['Precio minimo'], r)).filter((v): v is number => v != null && v > 0)
-    const maxs = records.map(r => kg(r['Precio maximo'], r)).filter((v): v is number => v != null && v > 0)
+    const norms = records
+      .map(r => normalizedPrice(r['Precio promedio'], unitOf(r)))
+      .filter((n): n is NormalizedPrice => n != null)
+    if (!norms.length) return null
+    const kgCount = norms.filter(n => n.basis === 'kg').length
+    const basis: PriceBasis = kgCount >= norms.length - kgCount ? 'kg' : 'u'
+
+    const vals = (field: 'Precio promedio' | 'Precio minimo' | 'Precio maximo') =>
+      records
+        .map(r => normalizedPrice(r[field], unitOf(r)))
+        .filter((n): n is NormalizedPrice => n != null && n.basis === basis && n.value > 0)
+        .map(n => n.value)
+    const avgs = vals('Precio promedio'); const mins = vals('Precio minimo'); const maxs = vals('Precio maximo')
     return {
+      basis,
       comparable: avgs.length,
       avg: avgs.length ? avgs.reduce((a, b) => a + b) / avgs.length : 0,
       min: mins.length ? Math.min(...mins) : 0,
@@ -176,16 +190,20 @@ export default function App() {
   // Shared class for clickable cell content
   const cellBtn = 'cursor-pointer hover:text-green-700 hover:underline underline-offset-2 transition-colors'
 
-  // $/kg table cell, with the conversion shown on hover.
-  const renderKgCell = (price: string, unit: string) => {
-    const pk = pricePerKilo(price, unit)
-    const kilos = unitToKilos(unit)
+  // Comparable-price cell: $/kg when the unit has weight, else $/u (per piece),
+  // with the conversion shown on hover.
+  const renderCompCell = (price: string, unit: string) => {
+    const np = normalizedPrice(price, unit)
+    const divisor = np?.basis === 'kg' ? unitToKilos(unit) : unitToPieces(unit)
+    const noun = np?.basis === 'kg' ? 'kg' : 'u'
     return (
       <td
         className="text-right font-mono text-sm text-green-800 font-semibold whitespace-nowrap"
-        title={pk != null && kilos ? `${formatPrice(price)} ÷ ${kilos} kg` : 'Precio por unidad (no convertible a $/kg)'}
+        title={np ? `${formatPrice(price)} ÷ ${divisor} ${noun}` : 'Sin precio comparable (volumen/litro)'}
       >
-        {pk != null ? formatCLP(pk) : '—'}
+        {np
+          ? <>{formatCLP(np.value)}<span className="text-gray-400 text-xs">{basisSuffix(np.basis)}</span></>
+          : '—'}
       </td>
     )
   }
@@ -413,15 +431,15 @@ export default function App() {
         {/* ── Results ── */}
         {!loading && !error && records.length > 0 && (
           <>
-            {/* Stats cards ($/kg) */}
+            {/* Stats cards (comparable price: $/kg or $/u) */}
             {stats && (
               <>
                 <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 mb-1">
                   {([
-                    { label: 'Total registros',     value: total.toLocaleString('es-CL'),            mono: false },
-                    { label: '$/kg promedio (pág.)', value: stats.avg ? formatCLP(stats.avg) : '—',   mono: true },
-                    { label: '$/kg mínimo (pág.)',   value: stats.min ? formatCLP(stats.min) : '—',   mono: true },
-                    { label: '$/kg máximo (pág.)',   value: stats.max ? formatCLP(stats.max) : '—',   mono: true },
+                    { label: 'Total registros',                       value: total.toLocaleString('es-CL'),          mono: false },
+                    { label: `${basisLabel(stats.basis)} promedio (pág.)`, value: stats.avg ? formatCLP(stats.avg) : '—', mono: true },
+                    { label: `${basisLabel(stats.basis)} mínimo (pág.)`,   value: stats.min ? formatCLP(stats.min) : '—', mono: true },
+                    { label: `${basisLabel(stats.basis)} máximo (pág.)`,   value: stats.max ? formatCLP(stats.max) : '—', mono: true },
                   ] as const).map(({ label, value, mono }) => (
                     <div key={label} className="bg-white rounded-xl shadow p-4 border border-gray-100">
                       <p className="text-xs text-gray-500 mb-1 uppercase tracking-wide">{label}</p>
@@ -430,7 +448,8 @@ export default function App() {
                   ))}
                 </div>
                 <p className="text-xs text-gray-400 mb-4">
-                  $/kg estimado sobre {stats.comparable} de {records.length} filas de la página con unidad convertible.
+                  {basisLabel(stats.basis)} estimado sobre {stats.comparable} de {records.length} filas de la página
+                  {stats.basis === 'u' ? ' (producto vendido por unidad)' : ' con unidad convertible'}.
                 </p>
               </>
             )}
@@ -494,7 +513,7 @@ export default function App() {
                       <th className="text-right">Precio mín.</th>
                       <th className="text-right">Precio máx.</th>
                       <th className="text-right">Precio prom.</th>
-                      <th className="text-right">$ / kg</th>
+                      <th className="text-right" title="Precio comparable: por kilo ($/kg) o por unidad ($/u)">$/kg · $/u</th>
                       {resultTipo === 'mayorista' && <th className="text-right">Volumen</th>}
                     </tr>
                   </thead>
@@ -524,7 +543,7 @@ export default function App() {
                             <td className="text-right font-mono text-sm text-green-700">{formatPrice(r['Precio minimo'])}</td>
                             <td className="text-right font-mono text-sm text-green-700">{formatPrice(r['Precio maximo'])}</td>
                             <td className="text-right font-mono text-sm text-green-700 font-bold">{formatPrice(r['Precio promedio'])}</td>
-                            {renderKgCell(r['Precio promedio'], r['Unidad de comercializacion'])}
+                            {renderCompCell(r['Precio promedio'], r['Unidad de comercializacion'])}
                             <td className="text-right text-sm">{r.Volumen || '—'}</td>
                           </tr>
                         ))
@@ -559,7 +578,7 @@ export default function App() {
                             <td className="text-right font-mono text-sm text-green-700">{formatPrice(r['Precio minimo'])}</td>
                             <td className="text-right font-mono text-sm text-green-700">{formatPrice(r['Precio maximo'])}</td>
                             <td className="text-right font-mono text-sm text-green-700 font-bold">{formatPrice(r['Precio promedio'])}</td>
-                            {renderKgCell(r['Precio promedio'], r.Unidad)}
+                            {renderCompCell(r['Precio promedio'], r.Unidad)}
                           </tr>
                         ))
                     }

@@ -193,6 +193,64 @@ export function pricePerKilo(priceStr: string, unit: string): number | null {
   return p / kilos
 }
 
+// ── $/unidad normalization (products sold by count, not weight) ──────────────────
+
+// How many individual pieces one commercialization unit represents, for products
+// sold by count rather than weight (celery, lettuce, garlic braids, etc.).
+// "$/unidad" -> 1, "$/caja 12 unidades" -> 12, "$/docena de matas" -> 12,
+// "$/media docena de atados" -> 6, "$/docena de paquetes 5 unidades" -> 60,
+// "$/cien unidades" -> 100. Weight units -> null (those use $/kg instead).
+export function unitToPieces(unit: string): number | null {
+  if (!unit) return null
+  const s = unit.toLowerCase()
+
+  // Outer multiplier: "docena" (12), "media docena" (6), "cien/ciento" (100).
+  const outer = s.includes('media docena') ? 6
+    : s.includes('docena') ? 12
+    : /\b(cien|ciento)\b/.test(s) ? 100
+    : null
+  // Inner per-pack count, e.g. "12 unidades", "5 paquetes", "50 trenza".
+  const inner = s.match(/([\d.,]+)\s*(?:unidad|mata|atado|paquete|canastillo|trenza)/)
+  const innerN = inner ? num(inner[1]) : null
+
+  // Multiplicative, e.g. "$/docena de paquetes 5 unidades" = 12 × 5.
+  if (outer && innerN && innerN > 0) return outer * innerN
+  if (innerN && innerN > 0) return innerN
+  if (outer) return outer
+  // Singular piece word with no count, e.g. "$/unidad", "$/paquete", "$/atado".
+  if (/\b(unidad|mata|atado|paquete|trenza)s?\b/.test(s)) return 1
+  return null
+}
+
+// Price per individual piece, or null when the unit isn't count-based.
+export function pricePerUnit(priceStr: string, unit: string): number | null {
+  const pieces = unitToPieces(unit)
+  if (!pieces || pieces <= 0) return null
+  const p = parsePrice(priceStr)
+  if (!p) return null
+  return p / pieces
+}
+
+// ── Unified comparable price ─────────────────────────────────────────────────────
+
+export type PriceBasis = 'kg' | 'u'
+export interface NormalizedPrice { value: number; basis: PriceBasis }
+
+// Best comparable unit price for a row: $/kg when the unit carries weight, else
+// $/unidad when it's sold by count. null only when neither can be derived
+// (e.g. "$/litro", "$/botella 900 ml"). $/kg takes priority when both apply.
+export function normalizedPrice(priceStr: string, unit: string): NormalizedPrice | null {
+  const kg = pricePerKilo(priceStr, unit)
+  if (kg != null) return { value: kg, basis: 'kg' }
+  const u = pricePerUnit(priceStr, unit)
+  if (u != null) return { value: u, basis: 'u' }
+  return null
+}
+
+export function basisLabel(b: PriceBasis): string { return b === 'kg' ? '$/kg' : '$/u' }
+export function basisSuffix(b: PriceBasis): string { return b === 'kg' ? '/kg' : '/u' }
+export function basisNoun(b: PriceBasis): string { return b === 'kg' ? 'kg' : 'unidad' }
+
 // ── Catalogue (distinct product names per resource) ─────────────────────────────
 
 const catalogCache: Record<string, string[]> = {}

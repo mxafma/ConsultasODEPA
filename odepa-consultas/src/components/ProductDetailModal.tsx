@@ -6,7 +6,8 @@ import {
 import {
   type Anio, type MayoristaRecord, type ConsumidorRecord,
   RESOURCE_IDS, API_BASE,
-  normalize, baseProductName, parsePrice, formatCLP, pricePerKilo, getCatalog, matchProducts,
+  normalize, baseProductName, parsePrice, formatCLP,
+  pricePerKilo, pricePerUnit, getCatalog, matchProducts,
 } from '../lib/odepa'
 
 interface Props {
@@ -18,10 +19,32 @@ interface Props {
   onClose: () => void
 }
 
+// kg = $/kilo, u = $/unidad (per piece), raw = price as-is (no normalization).
+type Basis = 'kg' | 'u' | 'raw'
 interface TrendPoint { fecha: string; value: number }
-interface Trend { data: TrendPoint[]; kgMode: boolean; unitLabel: string }
+interface Trend { data: TrendPoint[]; basis: Basis; label: string }
 
-// Build a datastore_search URL through the proxy.
+const sfx = (b: Basis): string => (b === 'kg' ? '/kg' : b === 'u' ? '/u' : '')
+const noun = (b: Basis): string => (b === 'kg' ? 'kg' : 'unidad')
+
+// Comparable value of a row under a basis, or null if not derivable.
+function rowValue(price: string, unit: string, basis: Basis): number | null {
+  if (basis === 'kg') return pricePerKilo(price, unit)
+  if (basis === 'u') return pricePerUnit(price, unit)
+  const p = parsePrice(price); return p > 0 ? p : null
+}
+
+// Pick the basis that covers ≥50% of rows: prefer $/kg, then $/unidad, else raw.
+function chooseBasis(prices: string[], units: string[]): Basis {
+  const n = prices.length
+  if (!n) return 'raw'
+  const kg = prices.filter((p, i) => pricePerKilo(p, units[i]) != null).length
+  if (kg / n >= 0.5) return 'kg'
+  const u = prices.filter((p, i) => pricePerUnit(p, units[i]) != null).length
+  if (u / n >= 0.5) return 'u'
+  return 'raw'
+}
+
 function searchUrl(
   resourceId: string,
   opts: { fields?: string; filters?: Record<string, unknown>; sort?: string; limit?: number },
@@ -46,7 +69,6 @@ function dominantUnit(units: string[]): string {
 }
 
 function fmtDate(d: string): string {
-  // "2026-01-02" -> "02-01"
   const [, m, day] = d.split('-')
   return day && m ? `${day}-${m}` : d
 }
@@ -55,10 +77,11 @@ export default function ProductDetailModal({ product, anio, region, subsector, r
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [trend, setTrend] = useState<Trend | null>(null)
-  const [mayKg, setMayKg] = useState<number | null>(null)
+  const [mayVal, setMayVal] = useState<number | null>(null)
   const [mayDate, setMayDate] = useState<string | null>(null)
-  const [consKg, setConsKg] = useState<number | null>(null)
+  const [consVal, setConsVal] = useState<number | null>(null)
   const [consDate, setConsDate] = useState<string | null>(null)
+  const [consBasis, setConsBasis] = useState<Basis | null>(null)
   const [consChecked, setConsChecked] = useState(false)
 
   useEffect(() => {
@@ -67,7 +90,8 @@ export default function ProductDetailModal({ product, anio, region, subsector, r
 
     async function load() {
       setLoading(true); setError(null)
-      setTrend(null); setMayKg(null); setMayDate(null); setConsKg(null); setConsDate(null); setConsChecked(false)
+      setTrend(null); setMayVal(null); setMayDate(null)
+      setConsVal(null); setConsDate(null); setConsBasis(null); setConsChecked(false)
       try {
         // ── Mayorista trend ──
         const mayRid = RESOURCE_IDS.mayorista[anio]
@@ -87,16 +111,14 @@ export default function ProductDetailModal({ product, anio, region, subsector, r
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const rows: MayoristaRecord[] = (await res.json()).result.records
 
-        const convCount = rows.filter(
-          r => pricePerKilo(r['Precio promedio'], r['Unidad de comercializacion']) != null,
-        ).length
-        const kgMode = rows.length > 0 && convCount / rows.length >= 0.5
+        const basis = chooseBasis(
+          rows.map(r => r['Precio promedio']),
+          rows.map(r => r['Unidad de comercializacion']),
+        )
 
         const byDate = new Map<string, number[]>()
         for (const r of rows) {
-          const v = kgMode
-            ? pricePerKilo(r['Precio promedio'], r['Unidad de comercializacion'])
-            : parsePrice(r['Precio promedio'])
+          const v = rowValue(r['Precio promedio'], r['Unidad de comercializacion'], basis)
           if (v == null || v <= 0) continue
           const arr = byDate.get(r.Fecha) ?? []
           arr.push(v); byDate.set(r.Fecha, arr)
@@ -104,11 +126,15 @@ export default function ProductDetailModal({ product, anio, region, subsector, r
         const data: TrendPoint[] = [...byDate.entries()].map(([fecha, arr]) => ({
           fecha, value: Math.round(avg(arr)),
         }))
-        const unitLabel = kgMode ? '$/kg' : (dominantUnit(rows.map(r => r['Unidad de comercializacion'])) || '$')
+        const label = basis === 'kg' ? '$/kg'
+          : basis === 'u' ? '$/unidad'
+          : (dominantUnit(rows.map(r => r['Unidad de comercializacion'])) || '$')
 
         if (cancelled) return
-        setTrend({ data, kgMode, unitLabel })
-        if (kgMode && data.length) { setMayKg(data[data.length - 1].value); setMayDate(data[data.length - 1].fecha) }
+        setTrend({ data, basis, label })
+        if (basis !== 'raw' && data.length) {
+          setMayVal(data[data.length - 1].value); setMayDate(data[data.length - 1].fecha)
+        }
 
         // ── Consumidor (margin) ──
         const consRid = RESOURCE_IDS.consumidor[anio]
@@ -126,11 +152,14 @@ export default function ProductDetailModal({ product, anio, region, subsector, r
             const crows: ConsumidorRecord[] = (await cres.json()).result.records
             if (crows.length) {
               const latest = crows[0]['Fecha inicio']
-              const kgs = crows
-                .filter(r => r['Fecha inicio'] === latest)
-                .map(r => pricePerKilo(r['Precio promedio'], r.Unidad))
+              const week = crows.filter(r => r['Fecha inicio'] === latest)
+              const cbasis = chooseBasis(week.map(r => r['Precio promedio']), week.map(r => r.Unidad))
+              const vals = week
+                .map(r => rowValue(r['Precio promedio'], r.Unidad, cbasis))
                 .filter((v): v is number => v != null && v > 0)
-              if (kgs.length && !cancelled) { setConsKg(Math.round(avg(kgs))); setConsDate(latest) }
+              if (vals.length && !cancelled) {
+                setConsVal(Math.round(avg(vals))); setConsDate(latest); setConsBasis(cbasis)
+              }
             }
           }
         }
@@ -146,8 +175,12 @@ export default function ProductDetailModal({ product, anio, region, subsector, r
     return () => { cancelled = true }
   }, [product, anio, region, subsector])
 
-  const margin = mayKg != null && consKg != null ? consKg - mayKg : null
-  const marginPct = margin != null && mayKg ? (margin / mayKg) * 100 : null
+  const mayBasis = trend?.basis ?? null
+  // Margin only when both sides share the same comparable basis ($/kg or $/u).
+  const comparable = mayVal != null && consVal != null && mayBasis != null
+    && mayBasis !== 'raw' && mayBasis === consBasis
+  const margin = comparable ? (consVal as number) - (mayVal as number) : null
+  const marginPct = margin != null && mayVal ? (margin / mayVal) * 100 : null
   const scope = regionLabel ? `Región: ${regionLabel}` : 'Todas las regiones'
 
   return (
@@ -182,33 +215,35 @@ export default function ProductDetailModal({ product, anio, region, subsector, r
               <div className="bg-green-50 rounded-xl p-3 border border-green-100">
                 <p className="text-xs text-gray-500 uppercase tracking-wide">Mayorista (compras)</p>
                 <p className="text-xl font-bold text-green-700 font-mono">
-                  {mayKg != null ? `${formatCLP(mayKg)}/kg` : '—'}
+                  {mayVal != null && mayBasis ? `${formatCLP(mayVal)}${sfx(mayBasis)}` : '—'}
                 </p>
-                <p className="text-xs text-gray-400">{mayDate ?? 'sin $/kg comparable'}</p>
+                <p className="text-xs text-gray-400">{mayDate ?? 'sin precio comparable'}</p>
               </div>
               <div className="bg-amber-50 rounded-xl p-3 border border-amber-100">
                 <p className="text-xs text-gray-500 uppercase tracking-wide">Consumidor (público)</p>
                 <p className="text-xl font-bold text-amber-700 font-mono">
-                  {consKg != null ? `${formatCLP(consKg)}/kg` : '—'}
+                  {consVal != null && consBasis ? `${formatCLP(consVal)}${sfx(consBasis)}` : '—'}
                 </p>
                 <p className="text-xs text-gray-400">
-                  {consKg != null ? `semana ${consDate}` : consChecked ? 'sin datos de consumidor' : ''}
+                  {consVal != null ? `semana ${consDate}` : consChecked ? 'sin datos de consumidor' : ''}
                 </p>
               </div>
               <div className="bg-gray-50 rounded-xl p-3 border border-gray-200">
                 <p className="text-xs text-gray-500 uppercase tracking-wide">Margen referencial</p>
-                {margin != null ? (
+                {margin != null && mayBasis ? (
                   <>
                     <p className={`text-xl font-bold font-mono flex items-center gap-1 ${margin >= 0 ? 'text-green-700' : 'text-red-600'}`}>
                       {margin >= 0 ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
-                      {formatCLP(Math.abs(margin))}/kg
+                      {formatCLP(Math.abs(margin))}{sfx(mayBasis)}
                     </p>
                     <p className="text-xs text-gray-400">
-                      {marginPct != null ? `${marginPct >= 0 ? '+' : ''}${marginPct.toFixed(0)}% sobre mayorista` : ''}
+                      {marginPct != null ? `${marginPct >= 0 ? '+' : ''}${marginPct.toFixed(0)}% · por ${noun(mayBasis)}` : ''}
                     </p>
                   </>
                 ) : (
-                  <p className="text-sm text-gray-400 mt-1">No comparable en $/kg</p>
+                  <p className="text-sm text-gray-400 mt-1">
+                    {consVal != null && mayBasis !== consBasis ? 'Bases distintas (kg vs unidad)' : 'No comparable'}
+                  </p>
                 )}
               </div>
             </div>
@@ -216,9 +251,12 @@ export default function ProductDetailModal({ product, anio, region, subsector, r
             {/* ── Trend chart ── */}
             <div className="mt-2">
               <div className="flex items-baseline justify-between mb-1">
-                <h4 className="font-semibold text-sm text-gray-700">Tendencia mayorista ({trend?.unitLabel ?? '—'})</h4>
-                {trend && !trend.kgMode && (
-                  <span className="text-xs text-amber-600">Producto por unidad: precio sin convertir a $/kg</span>
+                <h4 className="font-semibold text-sm text-gray-700">Tendencia mayorista ({trend?.label ?? '—'})</h4>
+                {trend && trend.basis === 'u' && (
+                  <span className="text-xs text-gray-500">Producto por unidad ($/u)</span>
+                )}
+                {trend && trend.basis === 'raw' && (
+                  <span className="text-xs text-amber-600">Precio sin normalizar (unidades mixtas)</span>
                 )}
               </div>
               {trend && trend.data.length > 1 ? (
@@ -235,7 +273,7 @@ export default function ProductDetailModal({ product, anio, region, subsector, r
                         domain={['auto', 'auto']}
                       />
                       <Tooltip
-                        formatter={(v) => [formatCLP(Number(v)), trend.unitLabel] as [string, string]}
+                        formatter={(v) => [formatCLP(Number(v)), trend.label] as [string, string]}
                         labelFormatter={(l) => `Fecha: ${l}`}
                       />
                       <Line type="monotone" dataKey="value" stroke="#15803d" strokeWidth={2} dot={false} />
@@ -248,8 +286,8 @@ export default function ProductDetailModal({ product, anio, region, subsector, r
             </div>
 
             <p className="text-xs text-gray-400 mt-3">
-              $/kg estimado a partir de la unidad de comercialización. El margen es referencial: el precio
-              al consumidor incluye costos de distribución, mermas y otros que no son tu margen real.
+              Precio comparable estimado desde la unidad de comercialización ($/kg si tiene peso, si no $/unidad).
+              El margen es referencial: el precio al consumidor incluye distribución, mermas y otros costos.
             </p>
           </>
         )}
