@@ -60,6 +60,9 @@ export interface Filters {
   grupo: string
   tipoMonitoreo: string
   mercado: string
+  variedad: string
+  calidad: string
+  sector: string
 }
 
 export interface MayoristaRecord {

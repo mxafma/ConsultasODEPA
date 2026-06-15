@@ -18,6 +18,7 @@ import {
 
 const EMPTY_FILTERS: Filters = {
   producto: '', region: '', subsector: '', grupo: '', tipoMonitoreo: '', mercado: '',
+  variedad: '', calidad: '', sector: '',
 }
 
 export default function App() {
@@ -60,8 +61,11 @@ export default function App() {
     if (productMatches && productMatches.length)    apiFilters['Producto'] = productMatches
     if (tipo === 'mayorista' && f.subsector)       apiFilters['Subsector'] = f.subsector
     if (tipo === 'mayorista' && f.mercado)          apiFilters['Mercado'] = f.mercado
+    if (tipo === 'mayorista' && f.variedad)         apiFilters['Variedad / Tipo'] = f.variedad
+    if (tipo === 'mayorista' && f.calidad)          apiFilters['Calidad'] = f.calidad
     if (tipo === 'consumidor' && f.grupo)           apiFilters['Grupo'] = f.grupo
     if (tipo === 'consumidor' && f.tipoMonitoreo)   apiFilters['Tipo de punto monitoreo'] = f.tipoMonitoreo
+    if (tipo === 'consumidor' && f.sector)          apiFilters['Sector'] = f.sector
     if (f.region)                                   apiFilters['ID region'] = Number(f.region)
     if (Object.keys(apiFilters).length > 0) params.set('filters', JSON.stringify(apiFilters))
 
@@ -124,7 +128,7 @@ export default function App() {
 
   const handleTipoChange = (next: TipoPrecio) => {
     setTipoPrecio(next)
-    setFilters(f => ({ ...f, subsector: '', grupo: '', tipoMonitoreo: '', mercado: '' }))
+    setFilters(f => ({ ...f, subsector: '', grupo: '', tipoMonitoreo: '', mercado: '', variedad: '', calidad: '', sector: '' }))
   }
 
   // Called when user clicks a filterable cell in the table
@@ -185,6 +189,9 @@ export default function App() {
     filters.grupo       && { key: 'grupo',           label: 'Grupo',           value: filters.grupo },
     filters.tipoMonitoreo && { key: 'tipoMonitoreo', label: 'Punto',          value: filters.tipoMonitoreo },
     filters.mercado     && { key: 'mercado',         label: 'Mercado',         value: filters.mercado },
+    filters.variedad    && { key: 'variedad',        label: 'Variedad',        value: filters.variedad },
+    filters.calidad     && { key: 'calidad',         label: 'Calidad',         value: filters.calidad },
+    filters.sector      && { key: 'sector',          label: 'Sector',          value: filters.sector },
   ].filter(Boolean) as { key: keyof Filters; label: string; value: string }[]
 
   // Shared class for clickable cell content
@@ -523,8 +530,20 @@ export default function App() {
                           <tr key={r._id} className="hover">
                             <td className="whitespace-nowrap text-xs text-gray-500">{r.Fecha}</td>
                             {renderProductCell(r.Producto, r.Producto)}
-                            <td className="text-sm">{r['Variedad / Tipo'] || '—'}</td>
-                            <td className="text-sm">{r.Calidad || '—'}</td>
+                            <td
+                              className={`text-sm ${r['Variedad / Tipo'] ? cellBtn : ''}`}
+                              onClick={() => r['Variedad / Tipo'] && applyFromCell({ variedad: r['Variedad / Tipo'] })}
+                              title={r['Variedad / Tipo'] ? 'Filtrar por esta variedad' : undefined}
+                            >
+                              {r['Variedad / Tipo'] || '—'}
+                            </td>
+                            <td
+                              className={`text-sm ${r.Calidad ? cellBtn : ''}`}
+                              onClick={() => r.Calidad && applyFromCell({ calidad: r.Calidad })}
+                              title={r.Calidad ? 'Filtrar por esta calidad' : undefined}
+                            >
+                              {r.Calidad || '—'}
+                            </td>
                             <td
                               className={`text-sm ${cellBtn}`}
                               onClick={() => applyFromCell({ mercado: r.Mercado })}
@@ -552,7 +571,13 @@ export default function App() {
                             <td className="whitespace-nowrap text-xs text-gray-500">{r['Fecha inicio']}</td>
                             <td className="whitespace-nowrap text-xs text-gray-500">{r['Fecha termino']}</td>
                             {renderProductCell(r.Producto, baseProductName(r.Producto))}
-                            <td className="text-sm">{r.Sector || '—'}</td>
+                            <td
+                              className={`text-sm ${r.Sector ? cellBtn : ''}`}
+                              onClick={() => r.Sector && applyFromCell({ sector: r.Sector })}
+                              title={r.Sector ? 'Filtrar por este sector' : undefined}
+                            >
+                              {r.Sector || '—'}
+                            </td>
                             <td
                               className={`text-sm ${cellBtn}`}
                               onClick={() => applyFromCell({ grupo: r.Grupo })}
