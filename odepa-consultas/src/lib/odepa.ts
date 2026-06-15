@@ -148,18 +148,33 @@ export function pageWindow(page: number, total: number): number[] {
 
 // How many kilos one commercialization unit represents, or null if not derivable.
 // Examples: "$/kilo" -> 1, "$/caja 18 kilos" -> 18, "$/docena de atados (6 kilos)" -> 6,
-// "$/atado 0,5 a 1 kilo" -> 0.75, "$/bolsa 800 grs" -> 0.8. Unit-based ("$/unidad",
+// "$/atado 0,5 a 1 kilo" -> 0.75, "$/bolsa 800 grs" -> 0.8,
+// "$/bandeja 12 canastillos 125 gramos" -> 1.5 (12 × 125 g). Unit-based ("$/unidad",
 // "$/caja 12 unidades", "$/docena de matas") -> null (not convertible to $/kg).
 export function unitToKilos(unit: string): number | null {
   if (!unit) return null
   const s = unit.toLowerCase()
   if (s.startsWith('$/kilo')) return 1 // already per kilo; parenthetical packaging is irrelevant
 
-  const range = s.match(/([\d.,]+)\s*a\s*([\d.,]+)\s*kilo/) // "0,5 a 1 kilo"
+  // Multiplicative pack, e.g. "$/bandeja 12 canastillos 125 gramos" = 12 × 125 g.
+  // Must run before the single-weight matches below, which would otherwise read
+  // only "125 gramos" and overstate $/kg ~12×.
+  const pack = s.match(/([\d.,]+)\s*canastillos?\s*([\d.,]+)\s*(kilo|gramo)/)
+  if (pack) {
+    const count = num(pack[1]); const each = num(pack[2])
+    if (count > 0 && each > 0) return count * (pack[3] === 'gramo' ? each / 1000 : each)
+  }
+
+  // Weight range, e.g. "0,5 a 1 kilo" / "300 a 500 gramos" → midpoint.
+  const range = s.match(/([\d.,]+)\s*a\s*([\d.,]+)\s*(kilo|gramo)/)
   if (range) {
     const a = num(range[1]); const b = num(range[2])
-    if (a > 0 && b > 0) return (a + b) / 2
+    if (a > 0 && b > 0) {
+      const mid = (a + b) / 2
+      return range[3] === 'gramo' ? mid / 1000 : mid
+    }
   }
+
   const kg = s.match(/([\d.,]+)\s*kilo/) // "18 kilos"
   if (kg) { const n = num(kg[1]); if (n > 0) return n }
 
