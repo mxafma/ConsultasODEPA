@@ -513,45 +513,46 @@ export default function App() {
                     </div>
                   ))}
                 </div>
-                <p className="text-xs text-gray-400 mb-4">
-                  {basisLabel(displayStats.basis)} estimado sobre {displayStats.comparable}{' '}
-                  {isGlobal
-                    ? `de ${total.toLocaleString('es-CL')} registros`
-                    : `de ${records.length} filas de la página${total > STATS_LIMIT ? ` — más de ${STATS_LIMIT.toLocaleString('es-CL')} registros, estadísticas parciales` : ''}`}
-                  {displayStats.basis === 'u' ? ' (producto vendido por unidad)' : ' con unidad convertible'}.
-                </p>
-              </>
-            )}
-
-            {/* Active filter chips */}
-            {activeChips.length > 0 && (
-              <div className="flex flex-wrap items-center gap-2 mb-3">
-                <span className="text-xs text-gray-400 uppercase tracking-wide">Filtrando por:</span>
-                {activeChips.map(({ key, label, value }) => (
-                  <span
-                    key={key}
-                    className="inline-flex items-center gap-1 bg-green-100 text-green-800 text-xs font-medium px-2.5 py-1 rounded-full border border-green-200"
-                  >
-                    <span className="text-green-500 font-normal">{label}:</span>
-                    {value}
-                    <button
-                      className="ml-0.5 hover:text-red-500 transition-colors"
-                      onClick={() => clearFilter(key)}
-                      title={`Quitar filtro ${label}`}
-                    >
-                      <X size={11} />
-                    </button>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 mb-4">
+                  <span className="text-xs text-gray-400">
+                    {basisLabel(displayStats.basis)} sobre{' '}
+                    {isGlobal
+                      ? `${total.toLocaleString('es-CL')} registros`
+                      : `${records.length} filas de la página${total > STATS_LIMIT ? ` (más de ${STATS_LIMIT.toLocaleString('es-CL')} totales)` : ''}`}
+                    {displayStats.basis === 'u' ? ' · por unidad' : ''}.
                   </span>
-                ))}
-                {activeChips.length > 1 && (
-                  <button
-                    className="text-xs text-gray-400 hover:text-red-500 underline underline-offset-2 transition-colors"
-                    onClick={() => fetchData(1, sortDir, resultTipo, EMPTY_FILTERS)}
-                  >
-                    Limpiar todo
-                  </button>
-                )}
-              </div>
+                  {activeChips.length > 0 && (
+                    <>
+                      <span className="text-xs text-gray-300">|</span>
+                      <span className="text-xs text-gray-400">Contexto:</span>
+                      {activeChips.map(({ key, label, value }) => (
+                        <span
+                          key={key}
+                          className="inline-flex items-center gap-1 bg-green-100 text-green-800 text-xs font-medium px-2.5 py-1 rounded-full border border-green-200"
+                        >
+                          <span className="text-green-500 font-normal">{label}:</span>
+                          {value}
+                          <button
+                            className="ml-0.5 hover:text-red-500 transition-colors"
+                            onClick={() => clearFilter(key)}
+                            title={`Quitar filtro ${label}`}
+                          >
+                            <X size={11} />
+                          </button>
+                        </span>
+                      ))}
+                      {activeChips.length > 1 && (
+                        <button
+                          className="text-xs text-gray-400 hover:text-red-500 underline underline-offset-2 transition-colors"
+                          onClick={() => fetchData(1, sortDir, resultTipo, EMPTY_FILTERS)}
+                        >
+                          Limpiar todo
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
+              </>
             )}
 
             {/* Table */}
