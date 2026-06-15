@@ -1,139 +1,16 @@
-import { useRef, useState } from 'react'
-import { Package, Search, RefreshCw, ChevronUp, ChevronDown, X } from 'lucide-react'
+import { lazy, Suspense, useState } from 'react'
+import { Package, Search, RefreshCw, ChevronUp, ChevronDown, X, LineChart } from 'lucide-react'
 
-// ── Constants ────────────────────────────────────────────────────────────────
-
-const RESOURCE_IDS = {
-  mayorista: {
-    2024: '11b8b84f-f409-4fa8-9764-2c874e703cc3',
-    2025: '92353fad-463e-4e85-a3ff-accb0286d0c5',
-    2026: '580beca0-e87e-4dd4-9e8a-0bd92773f4a6',
-  },
-  consumidor: {
-    2024: '5f773b96-6c3a-4017-b871-6340d779ea96',
-    2025: 'eab239c4-e338-4cde-a9e0-7c4f27826030',
-    2026: '9f885df4-afeb-4b75-8bab-9334f79db00f',
-  },
-} as const
-
-const SORT_FIELD: Record<TipoPrecio, string> = {
-  mayorista: 'Fecha',
-  consumidor: 'Fecha inicio',
-}
-
-const TIPOS_MONITOREO = ['Feria libre', 'Supermercado']
-const GRUPOS_CONSUMIDOR = ['Frutas', 'Hortalizas']
-
-const REGIONS = [
-  { id: 1,  name: 'Tarapacá' },
-  { id: 2,  name: 'Antofagasta' },
-  { id: 3,  name: 'Atacama' },
-  { id: 4,  name: 'Coquimbo' },
-  { id: 5,  name: 'Valparaíso' },
-  { id: 6,  name: "O'Higgins" },
-  { id: 7,  name: 'Maule' },
-  { id: 8,  name: 'Biobío' },
-  { id: 9,  name: 'La Araucanía' },
-  { id: 10, name: 'Los Lagos' },
-  { id: 11, name: 'Aysén' },
-  { id: 12, name: 'Magallanes' },
-  { id: 13, name: 'Metropolitana' },
-  { id: 14, name: 'Los Ríos' },
-  { id: 15, name: 'Arica y Parinacota' },
-  { id: 16, name: 'Ñuble' },
-]
-
-const PAGE_SIZE = 25
-const API_BASE = '/api/search'
-// Cap the IN-list passed to the API so a very broad term can't blow up the URL.
-const MAX_PRODUCT_MATCHES = 120
-
-// ── Types ────────────────────────────────────────────────────────────────────
-
-type TipoPrecio = 'mayorista' | 'consumidor'
-type Anio = 2024 | 2025 | 2026
-
-interface Filters {
-  producto: string
-  region: string     // ID region as string, e.g. "13"
-  subsector: string
-  grupo: string
-  tipoMonitoreo: string
-  mercado: string
-}
-
-interface MayoristaRecord {
-  _id: number
-  Fecha: string
-  'ID region': string
-  Region: string
-  Mercado: string
-  Subsector: string
-  Producto: string
-  'Variedad / Tipo': string
-  Calidad: string
-  'Unidad de comercializacion': string
-  Origen: string
-  Volumen: string
-  'Precio minimo': string
-  'Precio maximo': string
-  'Precio promedio': string
-}
-
-interface ConsumidorRecord {
-  _id: number
-  Anio: string
-  Mes: string
-  Semana: string
-  'Fecha inicio': string
-  'Fecha termino': string
-  'ID region': string
-  Region: string
-  Sector: string
-  'Tipo de punto monitoreo': string
-  Grupo: string
-  Producto: string
-  Unidad: string
-  'Precio minimo': string
-  'Precio maximo': string
-  'Precio promedio': string
-}
-
-type PriceRecord = MayoristaRecord | ConsumidorRecord
-
-interface ApiResponse {
-  result: { total: number; records: PriceRecord[] }
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-// Strip accents + lowercase so "platano" matches "Plátano" (accent-insensitive).
-function normalize(s: string): string {
-  return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim()
-}
-
-function parsePrice(val: string): number {
-  if (!val) return 0
-  return parseFloat(val.replace(',', '.')) || 0
-}
-
-function formatCLP(n: number): string {
-  if (n === 0) return '—'
-  return n.toLocaleString('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 })
-}
-
-function formatPrice(val: string): string { return formatCLP(parsePrice(val)) }
-
-function pageWindow(page: number, total: number): number[] {
-  if (total <= 5) return Array.from({ length: total }, (_, i) => i + 1)
-  if (page <= 3) return [1, 2, 3, 4, 5]
-  if (page >= total - 2) return [total - 4, total - 3, total - 2, total - 1, total]
-  return [page - 2, page - 1, page, page + 1, page + 2]
-}
-
-function regionName(id: string): string {
-  return REGIONS.find(r => String(r.id) === id)?.name ?? id
-}
+// Lazy-loaded so the charting library (recharts) is only fetched when a user
+// actually opens the product detail modal, keeping the initial bundle small.
+const ProductDetailModal = lazy(() => import('./components/ProductDetailModal'))
+import {
+  type TipoPrecio, type Anio, type Filters,
+  type MayoristaRecord, type ConsumidorRecord, type PriceRecord, type ApiResponse,
+  RESOURCE_IDS, SORT_FIELD, TIPOS_MONITOREO, GRUPOS_CONSUMIDOR, REGIONS, PAGE_SIZE, API_BASE,
+  formatCLP, formatPrice, pageWindow, regionName,
+  getCatalog, matchProducts, pricePerKilo, unitToKilos, baseProductName,
+} from './lib/odepa'
 
 // ── Component ────────────────────────────────────────────────────────────────
 
@@ -159,29 +36,10 @@ export default function App() {
   const [sortDir, setSortDir] = useState<'desc' | 'asc'>('desc')
   const [resultTipo, setResultTipo] = useState<TipoPrecio>('mayorista')
 
-  // Distinct product names per resource_id, used for accent-insensitive /
-  // partial product matching. Lazily fetched and cached for the session.
-  const catalogCache = useRef<Record<string, string[]>>({})
+  // Product opened in the detail modal (trend + margin), by base name.
+  const [detailProduct, setDetailProduct] = useState<string | null>(null)
 
   // ── Fetch ──────────────────────────────────────────────────────────────────
-
-  // Returns the full product catalogue for a resource, fetching it once.
-  const getCatalog = async (tipo: TipoPrecio): Promise<string[]> => {
-    const rid = RESOURCE_IDS[tipo][anio]
-    if (catalogCache.current[rid]) return catalogCache.current[rid]
-    const res = await fetch(`${API_BASE}?catalog=Producto&resource_id=${rid}`)
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const data: { values?: string[] } = await res.json()
-    const values = data.values ?? []
-    catalogCache.current[rid] = values
-    return values
-  }
-
-  // Catalogue entries whose name contains the term, ignoring accents/case.
-  const matchProducts = (catalog: string[], term: string): string[] => {
-    const q = normalize(term)
-    return catalog.filter(p => normalize(p).includes(q)).slice(0, MAX_PRODUCT_MATCHES)
-  }
 
   const buildUrl = (
     pageNum: number,
@@ -225,7 +83,7 @@ export default function App() {
       let productMatches: string[] | null = null
       const term = f.producto.trim()
       if (term) {
-        const catalog = await getCatalog(tipo)
+        const catalog = await getCatalog(RESOURCE_IDS[tipo][anio])
         productMatches = matchProducts(catalog, term)
         if (productMatches.length === 0) {
           // Nothing in the catalogue matches → no results, skip the API call.
@@ -280,12 +138,21 @@ export default function App() {
 
   // ── Derived ────────────────────────────────────────────────────────────────
 
+  // Commercialization unit for a record (differs by tipo).
+  const unitOf = (r: PriceRecord): string =>
+    resultTipo === 'mayorista'
+      ? (r as MayoristaRecord)['Unidad de comercializacion']
+      : (r as ConsumidorRecord).Unidad
+
+  // Stats computed on $/kg (only rows whose unit is convertible).
   const stats = (() => {
     if (!records.length) return null
-    const avgs = records.map(r => parsePrice(r['Precio promedio'])).filter(Boolean)
-    const mins = records.map(r => parsePrice(r['Precio minimo'])).filter(Boolean)
-    const maxs = records.map(r => parsePrice(r['Precio maximo'])).filter(Boolean)
+    const kg = (price: string, r: PriceRecord) => pricePerKilo(price, unitOf(r))
+    const avgs = records.map(r => kg(r['Precio promedio'], r)).filter((v): v is number => v != null && v > 0)
+    const mins = records.map(r => kg(r['Precio minimo'], r)).filter((v): v is number => v != null && v > 0)
+    const maxs = records.map(r => kg(r['Precio maximo'], r)).filter((v): v is number => v != null && v > 0)
     return {
+      comparable: avgs.length,
       avg: avgs.length ? avgs.reduce((a, b) => a + b) / avgs.length : 0,
       min: mins.length ? Math.min(...mins) : 0,
       max: maxs.length ? Math.max(...maxs) : 0,
@@ -308,6 +175,39 @@ export default function App() {
 
   // Shared class for clickable cell content
   const cellBtn = 'cursor-pointer hover:text-green-700 hover:underline underline-offset-2 transition-colors'
+
+  // $/kg table cell, with the conversion shown on hover.
+  const renderKgCell = (price: string, unit: string) => {
+    const pk = pricePerKilo(price, unit)
+    const kilos = unitToKilos(unit)
+    return (
+      <td
+        className="text-right font-mono text-sm text-green-800 font-semibold whitespace-nowrap"
+        title={pk != null && kilos ? `${formatPrice(price)} ÷ ${kilos} kg` : 'Precio por unidad (no convertible a $/kg)'}
+      >
+        {pk != null ? formatCLP(pk) : '—'}
+      </td>
+    )
+  }
+
+  // Product name cell: name (click = filter) + chart icon (click = detail modal).
+  const renderProductCell = (fullName: string, base: string) => (
+    <td className="font-semibold text-sm">
+      <div className="flex items-center gap-1.5">
+        <span className={cellBtn} onClick={() => applyFromCell({ producto: base })} title="Filtrar por este producto">
+          {fullName}
+        </span>
+        <button
+          type="button"
+          className="shrink-0 text-gray-300 hover:text-green-700 transition-colors"
+          onClick={() => setDetailProduct(base)}
+          title="Ver tendencia y margen $/kg"
+        >
+          <LineChart size={14} />
+        </button>
+      </div>
+    </td>
+  )
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -513,21 +413,26 @@ export default function App() {
         {/* ── Results ── */}
         {!loading && !error && records.length > 0 && (
           <>
-            {/* Stats cards */}
+            {/* Stats cards ($/kg) */}
             {stats && (
-              <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 mb-4">
-                {([
-                  { label: 'Total registros',       value: total.toLocaleString('es-CL'), mono: false },
-                  { label: 'Precio promedio (pág.)', value: formatCLP(stats.avg), mono: true },
-                  { label: 'Precio mínimo (pág.)',   value: formatCLP(stats.min), mono: true },
-                  { label: 'Precio máximo (pág.)',   value: formatCLP(stats.max), mono: true },
-                ] as const).map(({ label, value, mono }) => (
-                  <div key={label} className="bg-white rounded-xl shadow p-4 border border-gray-100">
-                    <p className="text-xs text-gray-500 mb-1 uppercase tracking-wide">{label}</p>
-                    <p className={`text-xl font-bold text-green-700 ${mono ? 'font-mono' : ''}`}>{value}</p>
-                  </div>
-                ))}
-              </div>
+              <>
+                <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 mb-1">
+                  {([
+                    { label: 'Total registros',     value: total.toLocaleString('es-CL'),            mono: false },
+                    { label: '$/kg promedio (pág.)', value: stats.avg ? formatCLP(stats.avg) : '—',   mono: true },
+                    { label: '$/kg mínimo (pág.)',   value: stats.min ? formatCLP(stats.min) : '—',   mono: true },
+                    { label: '$/kg máximo (pág.)',   value: stats.max ? formatCLP(stats.max) : '—',   mono: true },
+                  ] as const).map(({ label, value, mono }) => (
+                    <div key={label} className="bg-white rounded-xl shadow p-4 border border-gray-100">
+                      <p className="text-xs text-gray-500 mb-1 uppercase tracking-wide">{label}</p>
+                      <p className={`text-xl font-bold text-green-700 ${mono ? 'font-mono' : ''}`}>{value}</p>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-gray-400 mb-4">
+                  $/kg estimado sobre {stats.comparable} de {records.length} filas de la página con unidad convertible.
+                </p>
+              </>
             )}
 
             {/* Active filter chips */}
@@ -589,6 +494,7 @@ export default function App() {
                       <th className="text-right">Precio mín.</th>
                       <th className="text-right">Precio máx.</th>
                       <th className="text-right">Precio prom.</th>
+                      <th className="text-right">$ / kg</th>
                       {resultTipo === 'mayorista' && <th className="text-right">Volumen</th>}
                     </tr>
                   </thead>
@@ -597,13 +503,7 @@ export default function App() {
                       ? (records as MayoristaRecord[]).map(r => (
                           <tr key={r._id} className="hover">
                             <td className="whitespace-nowrap text-xs text-gray-500">{r.Fecha}</td>
-                            <td
-                              className={`font-semibold text-sm ${cellBtn}`}
-                              onClick={() => applyFromCell({ producto: r.Producto })}
-                              title="Filtrar por este producto"
-                            >
-                              {r.Producto}
-                            </td>
+                            {renderProductCell(r.Producto, r.Producto)}
                             <td className="text-sm">{r['Variedad / Tipo'] || '—'}</td>
                             <td className="text-sm">{r.Calidad || '—'}</td>
                             <td
@@ -624,6 +524,7 @@ export default function App() {
                             <td className="text-right font-mono text-sm text-green-700">{formatPrice(r['Precio minimo'])}</td>
                             <td className="text-right font-mono text-sm text-green-700">{formatPrice(r['Precio maximo'])}</td>
                             <td className="text-right font-mono text-sm text-green-700 font-bold">{formatPrice(r['Precio promedio'])}</td>
+                            {renderKgCell(r['Precio promedio'], r['Unidad de comercializacion'])}
                             <td className="text-right text-sm">{r.Volumen || '—'}</td>
                           </tr>
                         ))
@@ -631,13 +532,7 @@ export default function App() {
                           <tr key={r._id} className="hover">
                             <td className="whitespace-nowrap text-xs text-gray-500">{r['Fecha inicio']}</td>
                             <td className="whitespace-nowrap text-xs text-gray-500">{r['Fecha termino']}</td>
-                            <td
-                              className={`font-semibold text-sm ${cellBtn}`}
-                              onClick={() => applyFromCell({ producto: r.Producto.split('|')[0].trim() })}
-                              title="Filtrar por este producto"
-                            >
-                              {r.Producto}
-                            </td>
+                            {renderProductCell(r.Producto, baseProductName(r.Producto))}
                             <td className="text-sm">{r.Sector || '—'}</td>
                             <td
                               className={`text-sm ${cellBtn}`}
@@ -664,6 +559,7 @@ export default function App() {
                             <td className="text-right font-mono text-sm text-green-700">{formatPrice(r['Precio minimo'])}</td>
                             <td className="text-right font-mono text-sm text-green-700">{formatPrice(r['Precio maximo'])}</td>
                             <td className="text-right font-mono text-sm text-green-700 font-bold">{formatPrice(r['Precio promedio'])}</td>
+                            {renderKgCell(r['Precio promedio'], r.Unidad)}
                           </tr>
                         ))
                     }
@@ -704,6 +600,24 @@ export default function App() {
         </a>
         {' '}· ODEPA – Ministerio de Agricultura de Chile
       </footer>
+
+      {/* Product detail modal (trend + mayorista vs consumidor) */}
+      {detailProduct && (
+        <Suspense fallback={
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
+            <span className="loading loading-spinner loading-lg text-white" />
+          </div>
+        }>
+          <ProductDetailModal
+            product={detailProduct}
+            anio={anio}
+            region={filters.region || undefined}
+            subsector={resultTipo === 'mayorista' ? (filters.subsector || undefined) : undefined}
+            regionLabel={filters.region ? regionName(filters.region) : undefined}
+            onClose={() => setDetailProduct(null)}
+          />
+        </Suspense>
+      )}
 
     </div>
   )
