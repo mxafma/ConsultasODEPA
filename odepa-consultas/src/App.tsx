@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState, useRef } from 'react'
-import { Package, Search, RefreshCw, ChevronUp, ChevronDown, X, LineChart } from 'lucide-react'
+import { Package, Search, RefreshCw, ChevronUp, ChevronDown, X } from 'lucide-react'
 
 // Lazy-loaded so the charting library (recharts) is only fetched when a user
 // actually opens the product detail modal, keeping the initial bundle small.
@@ -274,22 +274,12 @@ export default function App() {
     )
   }
 
-  // Product name cell: name (click = filter) + chart icon (click = detail modal).
+  // Product name cell: click opens the detail modal.
   const renderProductCell = (fullName: string, base: string) => (
     <td className="font-semibold text-sm">
-      <div className="flex items-center gap-1.5">
-        <span className={cellBtn} onClick={() => applyFromCell({ producto: base })} title="Filtrar por este producto">
-          {fullName}
-        </span>
-        <button
-          type="button"
-          className="shrink-0 text-gray-300 hover:text-green-700 transition-colors"
-          onClick={() => setDetailProduct(base)}
-          title="Ver tendencia y margen $/kg"
-        >
-          <LineChart size={14} />
-        </button>
-      </div>
+      <span className={cellBtn} onClick={() => setDetailProduct(base)} title="Ver tendencia y margen">
+        {fullName}
+      </span>
     </td>
   )
 

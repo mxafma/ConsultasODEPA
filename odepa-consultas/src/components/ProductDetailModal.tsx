@@ -160,7 +160,21 @@ export default function ProductDetailModal({ product, anio, region, subsector, v
         // ── Consumidor (margin) ──
         const consRid = RESOURCE_IDS.consumidor[anio]
         const consCat = await getCatalog(consRid)
-        const consNames = consCat.filter(p => normalize(baseProductName(p)) === target)
+        const allConsNames = consCat.filter(p => normalize(baseProductName(p)) === target)
+        // Try to narrow to matching variedad/calidad (consumidor uses "Base|Variedad|Calidad" format).
+        let consNames = allConsNames
+        if ((variedad || calidad) && !fallbackNotice) {
+          const narrow = allConsNames.filter(p => {
+            const parts = p.split('|')
+            const pVar = normalize(parts[1]?.trim() ?? '')
+            const pCal = normalize(parts[2]?.trim() ?? '')
+            const varOk = !variedad || pVar.includes(normalize(variedad))
+            const calOk = !calidad || pCal.includes(normalize(calidad))
+            return varOk && calOk
+          })
+          if (narrow.length) consNames = narrow
+          // else: fall back silently to all base names (different naming across datasets)
+        }
         if (consNames.length) {
           const cf: Record<string, unknown> = { Producto: consNames }
           if (region) cf['ID region'] = Number(region)
