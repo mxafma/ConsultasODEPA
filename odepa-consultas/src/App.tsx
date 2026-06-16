@@ -720,6 +720,8 @@ export default function App() {
             anio={anio}
             region={filters.region || undefined}
             subsector={resultTipo === 'mayorista' ? (filters.subsector || undefined) : undefined}
+            variedad={resultTipo === 'mayorista' ? (filters.variedad || undefined) : undefined}
+            calidad={resultTipo === 'mayorista' ? (filters.calidad || undefined) : undefined}
             regionLabel={filters.region ? regionName(filters.region) : undefined}
             onClose={() => setDetailProduct(null)}
           />

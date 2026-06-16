@@ -15,6 +15,8 @@ interface Props {
   anio: Anio
   region?: string          // ID region as string (optional scope)
   subsector?: string       // mayorista subsector (optional scope)
+  variedad?: string
+  calidad?: string
   regionLabel?: string     // human label for the active region scope
   onClose: () => void
 }
@@ -74,7 +76,7 @@ function fmtDate(d: string): string {
   return day && m ? `${day}-${m}` : d
 }
 
-export default function ProductDetailModal({ product, anio, region, subsector, regionLabel, onClose }: Props) {
+export default function ProductDetailModal({ product, anio, region, subsector, variedad, calidad, regionLabel, onClose }: Props) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [trend, setTrend] = useState<Trend | null>(null)
@@ -82,6 +84,7 @@ export default function ProductDetailModal({ product, anio, region, subsector, r
   const [mayDate, setMayDate] = useState<string | null>(null)
   const [consByPunto, setConsByPunto] = useState<Record<string, ConsPuntoData>>({})
   const [consChecked, setConsChecked] = useState(false)
+  const [fallbackNotice, setFallbackNotice] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -90,49 +93,68 @@ export default function ProductDetailModal({ product, anio, region, subsector, r
     async function load() {
       setLoading(true); setError(null)
       setTrend(null); setMayVal(null); setMayDate(null)
-      setConsByPunto({}); setConsChecked(false)
+      setConsByPunto({}); setConsChecked(false); setFallbackNotice(null)
       try {
         // ── Mayorista trend ──
         const mayRid = RESOURCE_IDS.mayorista[anio]
         const mayCat = await getCatalog(mayRid)
         let mayNames = mayCat.filter(p => normalize(baseProductName(p)) === target)
-        if (mayNames.length === 0) mayNames = matchProducts(mayCat, product) // fallback to substring
+        if (mayNames.length === 0) mayNames = matchProducts(mayCat, product)
 
-        const filters: Record<string, unknown> = { Producto: mayNames }
-        if (region) filters['ID region'] = Number(region)
-        if (subsector) filters['Subsector'] = subsector
-
-        const url = searchUrl(mayRid, {
-          fields: 'Fecha,Precio promedio,Unidad de comercializacion',
-          filters, sort: 'Fecha asc', limit: 32000,
-        })
-        const res = await fetch(url)
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const rows: MayoristaRecord[] = (await res.json()).result.records
-
-        const basis = chooseBasis(
-          rows.map(r => r['Precio promedio']),
-          rows.map(r => r['Unidad de comercializacion']),
-        )
-
-        const byDate = new Map<string, number[]>()
-        for (const r of rows) {
-          const v = rowValue(r['Precio promedio'], r['Unidad de comercializacion'], basis)
-          if (v == null || v <= 0) continue
-          const arr = byDate.get(r.Fecha) ?? []
-          arr.push(v); byDate.set(r.Fecha, arr)
+        const fetchMayRows = async (extra: Record<string, unknown>) => {
+          const mf: Record<string, unknown> = { Producto: mayNames, ...extra }
+          if (region) mf['ID region'] = Number(region)
+          if (subsector) mf['Subsector'] = subsector
+          const url = searchUrl(mayRid, {
+            fields: 'Fecha,Precio promedio,Unidad de comercializacion',
+            filters: mf, sort: 'Fecha asc', limit: 32000,
+          })
+          const res = await fetch(url)
+          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+          return (await res.json()).result.records as MayoristaRecord[]
         }
-        const data: TrendPoint[] = [...byDate.entries()].map(([fecha, arr]) => ({
-          fecha, value: Math.round(avg(arr)),
-        }))
-        const label = basis === 'kg' ? '$/kg'
-          : basis === 'u' ? '$/unidad'
-          : (dominantUnit(rows.map(r => r['Unidad de comercializacion'])) || '$')
+
+        const buildTrend = (rows: MayoristaRecord[]) => {
+          const basis = chooseBasis(
+            rows.map(r => r['Precio promedio']),
+            rows.map(r => r['Unidad de comercializacion']),
+          )
+          const byDate = new Map<string, number[]>()
+          for (const r of rows) {
+            const v = rowValue(r['Precio promedio'], r['Unidad de comercializacion'], basis)
+            if (v == null || v <= 0) continue
+            const arr = byDate.get(r.Fecha) ?? []
+            arr.push(v); byDate.set(r.Fecha, arr)
+          }
+          const data: TrendPoint[] = [...byDate.entries()].map(([fecha, arr]) => ({
+            fecha, value: Math.round(avg(arr)),
+          }))
+          const label = basis === 'kg' ? '$/kg'
+            : basis === 'u' ? '$/unidad'
+            : (dominantUnit(rows.map(r => r['Unidad de comercializacion'])) || '$')
+          return { data, basis, label }
+        }
+
+        const scopeExtra: Record<string, unknown> = {}
+        if (variedad) scopeExtra['Variedad / Tipo'] = variedad
+        if (calidad) scopeExtra['Calidad'] = calidad
+        const hasScope = Object.keys(scopeExtra).length > 0
+
+        let rows = await fetchMayRows(scopeExtra)
+        let trendResult = buildTrend(rows)
+
+        if (hasScope && trendResult.data.length < 2) {
+          rows = await fetchMayRows({})
+          trendResult = buildTrend(rows)
+          const scopeStr = [variedad, calidad].filter(Boolean).join(' · ')
+          if (!cancelled) setFallbackNotice(`Sin datos suficientes para "${scopeStr}" — mostrando tendencia del producto completo.`)
+        }
 
         if (cancelled) return
-        setTrend({ data, basis, label })
-        if (basis !== 'raw' && data.length) {
-          setMayVal(data[data.length - 1].value); setMayDate(data[data.length - 1].fecha)
+        setTrend(trendResult)
+        if (trendResult.basis !== 'raw' && trendResult.data.length) {
+          setMayVal(trendResult.data[trendResult.data.length - 1].value)
+          setMayDate(trendResult.data[trendResult.data.length - 1].fecha)
         }
 
         // ── Consumidor (margin) ──
@@ -179,7 +201,7 @@ export default function ProductDetailModal({ product, anio, region, subsector, r
 
     load()
     return () => { cancelled = true }
-  }, [product, anio, region, subsector])
+  }, [product, anio, region, subsector, variedad, calidad])
 
   const mayBasis = trend?.basis ?? null
   const marginFor = (data: ConsPuntoData | undefined) => {
@@ -187,7 +209,12 @@ export default function ProductDetailModal({ product, anio, region, subsector, r
     if (mayBasis !== data.basis) return null
     return data.val - mayVal
   }
-  const scope = regionLabel ? `Región: ${regionLabel}` : 'Todas las regiones'
+  const scopeParts = [
+    regionLabel ? `Región: ${regionLabel}` : 'Todas las regiones',
+    !fallbackNotice && variedad,
+    !fallbackNotice && calidad,
+  ].filter(Boolean).join(' · ')
+  const scope = scopeParts
 
   return (
     <dialog className="modal modal-open">
@@ -250,6 +277,14 @@ export default function ProductDetailModal({ product, anio, region, subsector, r
                 )
               })}
             </div>
+
+            {/* Fallback notice */}
+            {fallbackNotice && (
+              <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3 text-xs text-amber-700">
+                <span className="shrink-0">⚠️</span>
+                <span>{fallbackNotice}</span>
+              </div>
+            )}
 
             {/* ── Trend chart ── */}
             <div className="mt-2">
