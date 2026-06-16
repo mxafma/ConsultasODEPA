@@ -502,6 +502,17 @@ export default function App() {
                       <p className={`text-xl font-bold text-green-700 ${mono ? 'font-mono' : ''}`}>{value}</p>
                     </div>
                   ))}
+                  {filters.producto && (
+                    <button
+                      className="bg-green-700 hover:bg-green-800 text-white rounded-xl shadow p-4 border border-green-800 text-left transition-colors"
+                      onClick={() => setDetailProduct(filters.producto)}
+                    >
+                      <p className="text-xs text-green-200 mb-1 uppercase tracking-wide flex items-center gap-1">
+                        <LineChart size={11} /> Historial · Consumidor
+                      </p>
+                      <p className="text-sm font-semibold capitalize truncate">{filters.producto}</p>
+                    </button>
+                  )}
                 </div>
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 mb-4">
                   <span className="text-xs text-gray-400">
