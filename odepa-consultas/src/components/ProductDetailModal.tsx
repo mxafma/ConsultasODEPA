@@ -143,7 +143,7 @@ export default function ProductDetailModal({ product, anio, region, subsector, v
         let rows = await fetchMayRows(scopeExtra)
         let trendResult = buildTrend(rows)
 
-        if (hasScope && trendResult.data.length < 2) {
+        if (hasScope && trendResult.data.length === 0) {
           rows = await fetchMayRows({})
           trendResult = buildTrend(rows)
           const scopeStr = [variedad, calidad].filter(Boolean).join(' · ')

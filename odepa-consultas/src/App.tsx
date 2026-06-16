@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState, useRef } from 'react'
-import { Package, Search, RefreshCw, ChevronUp, ChevronDown, X } from 'lucide-react'
+import { Package, Search, RefreshCw, ChevronUp, ChevronDown, X, LineChart } from 'lucide-react'
 
 // Lazy-loaded so the charting library (recharts) is only fetched when a user
 // actually opens the product detail modal, keeping the initial bundle small.
@@ -522,6 +522,15 @@ export default function App() {
                         >
                           <span className="text-green-500 font-normal">{label}:</span>
                           {value}
+                          {key === 'producto' && (
+                            <button
+                              className="ml-0.5 hover:text-green-700 transition-colors"
+                              onClick={() => setDetailProduct(filters.producto)}
+                              title="Ver tendencia y margen"
+                            >
+                              <LineChart size={11} />
+                            </button>
+                          )}
                           <button
                             className="ml-0.5 hover:text-red-500 transition-colors"
                             onClick={() => clearFilter(key)}
