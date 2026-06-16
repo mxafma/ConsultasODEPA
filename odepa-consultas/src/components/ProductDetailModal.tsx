@@ -85,6 +85,7 @@ export default function ProductDetailModal({ product, anio, region, subsector, v
   const [consByPunto, setConsByPunto] = useState<Record<string, ConsPuntoData>>({})
   const [consChecked, setConsChecked] = useState(false)
   const [fallbackNotice, setFallbackNotice] = useState<string | null>(null)
+  const [consNarrowed, setConsNarrowed] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -93,7 +94,7 @@ export default function ProductDetailModal({ product, anio, region, subsector, v
     async function load() {
       setLoading(true); setError(null)
       setTrend(null); setMayVal(null); setMayDate(null)
-      setConsByPunto({}); setConsChecked(false); setFallbackNotice(null)
+      setConsByPunto({}); setConsChecked(false); setFallbackNotice(null); setConsNarrowed(false)
       try {
         // ── Mayorista trend ──
         const mayRid = RESOURCE_IDS.mayorista[anio]
@@ -163,6 +164,7 @@ export default function ProductDetailModal({ product, anio, region, subsector, v
         const allConsNames = consCat.filter(p => normalize(baseProductName(p)) === target)
         // Try to narrow to matching variedad/calidad (consumidor uses "Base|Variedad|Calidad" format).
         let consNames = allConsNames
+        let narrowed = false
         if ((variedad || calidad) && !fallbackNotice) {
           const narrow = allConsNames.filter(p => {
             const parts = p.split('|')
@@ -172,9 +174,9 @@ export default function ProductDetailModal({ product, anio, region, subsector, v
             const calOk = !calidad || pCal.includes(normalize(calidad))
             return varOk && calOk
           })
-          if (narrow.length) consNames = narrow
-          // else: fall back silently to all base names (different naming across datasets)
+          if (narrow.length) { consNames = narrow; narrowed = true }
         }
+        if (!cancelled) setConsNarrowed(narrowed)
         if (consNames.length) {
           const cf: Record<string, unknown> = { Producto: consNames }
           if (region) cf['ID region'] = Number(region)
@@ -273,6 +275,13 @@ export default function ProductDetailModal({ product, anio, region, subsector, v
                 return (
                   <div key={punto} className="bg-amber-50 rounded-xl p-3 border border-amber-100">
                     <p className="text-xs text-gray-500 uppercase tracking-wide">Consumidor · {punto}</p>
+                    {(variedad || calidad) && consChecked && (
+                      <p className={`text-xs mb-1 ${consNarrowed ? 'text-green-600' : 'text-amber-600'}`}>
+                        {consNarrowed
+                          ? `✓ ${[variedad, calidad].filter(Boolean).join(' · ')}`
+                          : `⚠ ${product} completo (sin datos específicos)`}
+                      </p>
+                    )}
                     <p className="text-xl font-bold text-amber-700 font-mono">
                       {data ? `${formatCLP(data.val)}${sfx(data.basis)}` : '—'}
                     </p>
