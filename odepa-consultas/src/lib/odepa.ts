@@ -147,14 +147,74 @@ export function pageWindow(page: number, total: number): number[] {
   return [page - 2, page - 1, page, page + 1, page + 2]
 }
 
+// ── Shared conversion table (single source of truth) ────────────────────────────
+
+// The conversion of an ODEPA unit string to kilos / pieces lives in the backend
+// table mercado.unidad_conversion, which both backend (snapshot job) and frontend
+// read so they never diverge. The regex helpers below remain only as a fallback for
+// when the table hasn't loaded yet or doesn't list a unit; since the table is seeded
+// from the same regex, results match. Live behaviour degrades gracefully (pure regex)
+// if VITE_BACKEND_URL is unset or the backend is unreachable.
+
+interface ConversionRow {
+  kgPorUnidad: number | null
+  unidadesPorPack: number | null
+  base: PriceBasis | null
+}
+
+const conversionTable = new Map<string, ConversionRow>()
+let conversionLoaded: Promise<void> | null = null
+
+const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL ?? '').replace(/\/$/, '')
+
+// Fetch the shared conversion table once and cache it. Safe to call repeatedly.
+export function loadUnidadConversion(): Promise<void> {
+  if (conversionLoaded) return conversionLoaded
+  if (!BACKEND_URL) {
+    conversionLoaded = Promise.resolve() // no backend configured → regex fallback only
+    return conversionLoaded
+  }
+  conversionLoaded = fetch(`${BACKEND_URL}/api/mercado/unidad-conversion`)
+    .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
+    .then((rows: Array<Record<string, unknown>>) => {
+      for (const row of rows) {
+        const kg = row.kg_por_unidad
+        const pack = row.unidades_por_pack
+        conversionTable.set(String(row.unidad_texto), {
+          kgPorUnidad: kg != null ? Number(kg) : null,
+          unidadesPorPack: pack != null ? Number(pack) : null,
+          base: (row.base_comparacion as PriceBasis) ?? null,
+        })
+      }
+    })
+    .catch(err => {
+      // Don't break the live query: fall back to the regex helpers.
+      console.warn('No se pudo cargar unidad_conversion, usando fallback regex:', err)
+      conversionTable.clear()
+    })
+  return conversionLoaded
+}
+
+// Kick off the load at module init (fire-and-forget). Conversions use the regex
+// fallback until it resolves.
+void loadUnidadConversion()
+
 // ── $/kg normalization ─────────────────────────────────────────────────────────
 
 // How many kilos one commercialization unit represents, or null if not derivable.
+// Reads the shared table first; falls back to the regex parser below.
+export function unitToKilos(unit: string): number | null {
+  const row = conversionTable.get(unit)
+  if (row !== undefined) return row.kgPorUnidad
+  return unitToKilosRegex(unit)
+}
+
+// Regex fallback (mirror of backend UnidadConversionParser).
 // Examples: "$/kilo" -> 1, "$/caja 18 kilos" -> 18, "$/docena de atados (6 kilos)" -> 6,
 // "$/atado 0,5 a 1 kilo" -> 0.75, "$/bolsa 800 grs" -> 0.8,
 // "$/bandeja 12 canastillos 125 gramos" -> 1.5 (12 × 125 g). Unit-based ("$/unidad",
 // "$/caja 12 unidades", "$/docena de matas") -> null (not convertible to $/kg).
-export function unitToKilos(unit: string): number | null {
+function unitToKilosRegex(unit: string): number | null {
   if (!unit) return null
   const s = unit.toLowerCase()
   if (s.startsWith('$/kilo')) return 1 // already per kilo; parenthetical packaging is irrelevant
@@ -198,12 +258,20 @@ export function pricePerKilo(priceStr: string, unit: string): number | null {
 
 // ── $/unidad normalization (products sold by count, not weight) ──────────────────
 
-// How many individual pieces one commercialization unit represents, for products
-// sold by count rather than weight (celery, lettuce, garlic braids, etc.).
+// How many individual pieces one commercialization unit represents. Reads the
+// shared table first; falls back to the regex parser below.
+export function unitToPieces(unit: string): number | null {
+  const row = conversionTable.get(unit)
+  if (row !== undefined) return row.unidadesPorPack
+  return unitToPiecesRegex(unit)
+}
+
+// Regex fallback (mirror of backend UnidadConversionParser), for products sold by
+// count rather than weight (celery, lettuce, garlic braids, etc.).
 // "$/unidad" -> 1, "$/caja 12 unidades" -> 12, "$/docena de matas" -> 12,
 // "$/media docena de atados" -> 6, "$/docena de paquetes 5 unidades" -> 60,
 // "$/cien unidades" -> 100. Weight units -> null (those use $/kg instead).
-export function unitToPieces(unit: string): number | null {
+function unitToPiecesRegex(unit: string): number | null {
   if (!unit) return null
   const s = unit.toLowerCase()
 
